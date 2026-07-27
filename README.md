@@ -159,19 +159,35 @@ board that could not have arisen from legal play.
 
 ### Older links
 
-Links carry a format version, currently 3, and older ones are still read. The only
-rule that has changed is which letter the bot plays when a turn is given up, so a
-link made by an earlier version replays identically as long as it contains no
-skips — which covers nearly all of them, and means an old link, or a room written
-by a tab nobody has reloaded, keeps working. An older link that *does* contain a
-skip would land on a different board, so it is refused and says why. Anything
-written from here on uses the current format.
+Links carry a format version, currently 4, and **every** older one is still read.
+Each version's skipped turns are replayed with the rules that were in force when
+they were recorded:
+
+| Version | Skipped turns |
+| --- | --- |
+| 1 | did not exist yet |
+| 2 | the bot ignored rack limits, and a skip could rescue a player with no move |
+| 3 | the bot had to use a letter the giver still held |
+| 4 | the skip records the letter it used, so nothing is recomputed |
+
+Version 4 exists to end that pattern. Recomputing the bot's choice meant that any
+change to how it chooses stranded games already in progress — which is exactly
+what happened when version 3 landed. Writing the letter down costs nothing (an
+uppercase letter marks a skip, so tokens stay two characters wide) and makes a
+recorded game replay the same way for good.
+
+A version 2 game whose later moves *only* happened because a skip rescued a stuck
+player is replayed under that old rule, then handed to the current one, which will
+usually declare it finished — because under today's rules it was. Such a game
+carries a flag so re-encoding it does not produce a link that no longer replays.
+Games that never leaned on the old rule come back indistinguishable from one
+played today, unflagged.
 
 `node tools/migrate-rooms.mjs` reports on the live rooms in the database and can
-normalise them, though it rarely needs to: a room left alone becomes current the
-next time someone moves. Note that rewriting a room a player still has open will
-break their tab if it is running older code — and their next move will overwrite
-the rewrite.
+normalise them, though it no longer needs to: a room left alone reads fine and
+becomes current the next time someone moves. Note that rewriting a room a player
+still has open will break their tab if it is running older code — and their next
+move will overwrite the rewrite.
 
 That validation stops corruption, not cheating: either player can replay their
 own link and move for the other side, and nothing prevents it. Same trust model
