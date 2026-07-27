@@ -1,6 +1,7 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-standalone.module.js';
 import { LETTERS, WORD_LEN, inspectMove } from '../game.js';
 import { Rack } from './Rack.js';
+import { Share } from './Share.js';
 
 const EMPTY_SCRATCH = { slot: null, pendingWildcard: null, message: '' };
 
@@ -9,7 +10,7 @@ function describeMove(game, move) {
   return `${game.players[move.by].name} · slot ${move.pos + 1} → ${move.letter.toUpperCase()}${wildcard}`;
 }
 
-export function Board({ game, onMove, onResign, onRematch, onExit }) {
+export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
   // Per-turn scratch state lives in a ref with a state mirror for rendering.
   // Keyboard entry is faster than a render pass — typing "1" then "b" would
   // otherwise read a stale `slot` from the closure and drop the letter.
@@ -169,6 +170,10 @@ export function Board({ game, onMove, onResign, onRematch, onExit }) {
             <button type="button" class="big" onClick=${onRematch}>Rematch</button>
             <button type="button" class="secondary" onClick=${onExit}>Back to lobby</button>
           </div>`
+        : null}
+
+      ${shareUrl
+        ? html`<${Share} url=${shareUrl} waitingFor=${current.name} over=${over} />`
         : null}
 
       <div class="racks">
