@@ -150,6 +150,85 @@ def main() -> int:
             expect(page.locator("button.tile span").nth(move2["pos"])).to_have_text(move2["letter"].upper())
             check("digit-then-letter keyboard entry plays a move")
 
+            # --- definitions are shown for the word on the board and in the history ---
+            page.wait_for_function(
+                "async () => (await import('./src/definitions.js')).definitionsReady()"
+            )
+            board_now = page.evaluate(
+                "[...document.querySelectorAll('button.tile span')].map(s=>s.textContent).join('')"
+            ).lower()
+            expected = page.evaluate(
+                "async (w) => (await import('./src/definitions.js')).define(w)", board_now
+            )
+            definition = page.locator(".definition").inner_text()
+            assert board_now.upper() in definition, definition
+            if expected:
+                assert expected[:40] in definition, (expected, definition)
+                check(f"the board shows a definition ({board_now.upper()}: {expected[:44]}…)")
+            else:
+                assert "no definition bundled" in definition, definition
+                check(f"a word with no bundled definition says so ({board_now.upper()})")
+
+            glossed = page.locator(".move-list li .move-gloss")
+            assert glossed.count() >= 1, "played words should carry their meaning in the history"
+            check(f"{glossed.count()} played word(s) show their meaning in the move list")
+
+            # --- giving up a turn: the bot plays and both racks lose the letter ---
+            page.evaluate(
+                """async () => {
+                    const { createGame } = await import('./src/game.js');
+                    localStorage.setItem(
+                      'crg.game.v1', JSON.stringify(createGame('Sayan', 'Riya', 'cold')));
+                }"""
+            )
+            page.reload()
+            page.get_by_role("button", name="Resume").click()
+            expect(page.get_by_role("button", name="Give up turn (5 left)")).to_be_visible()
+            bot = page.evaluate(
+                """async () => {
+                    const { botMove } = await import('./src/game.js');
+                    return botMove(JSON.parse(localStorage.getItem('crg.game.v1')));
+                }"""
+            )
+            page.get_by_role("button", name="Give up turn").click()
+            page.locator(".confirm .danger").click()
+
+            expect(page.locator("button.tile span").nth(bot["pos"])).to_have_text(
+                bot["letter"].upper()
+            )
+            expect(page.get_by_role("status").first).to_contain_text("Riya's turn.")
+            for name in ("Sayan", "Riya"):
+                rack = page.locator("section.rack", has=page.get_by_role("heading", name=name))
+                # The on-turn rack labels its cards "Play b, …", the idle one "b, …".
+                card = rack.locator(f'.card[aria-label*="{bot["letter"]}, spent"]').first
+                assert card.count() == 1, f"{name} should have lost the letter the bot used"
+                assert card.get_attribute("data-state") != "ready", (
+                    f"{name}'s card for '{bot['letter']}' still looks unspent"
+                )
+                expect(rack.locator(".rack-count")).to_contain_text("26 of 27")
+            check(f"giving up plays {bot['word'].upper()} and costs both players '{bot['letter'].upper()}'")
+
+            expect(page.get_by_role("button", name="Give up turn (5 left)")).to_be_visible()
+            expect(page.locator(".move-list li").first).to_contain_text("Sayan skipped")
+            expect(page.locator(".move-list li").first).to_contain_text("both racks lose")
+            check("only the player who gave up spends a skip, and the history records it")
+
+            # --- skips run out ---
+            page.evaluate(
+                """async () => {
+                    const { createGame, SKIPS_PER_PLAYER } = await import('./src/game.js');
+                    const g = createGame('Sayan', 'Riya', 'cold');
+                    g.players[0].skipsUsed = SKIPS_PER_PLAYER;
+                    localStorage.setItem('crg.game.v1', JSON.stringify(g));
+                }"""
+            )
+            page.reload()
+            page.get_by_role("button", name="Resume").click()
+            no_skips = page.get_by_role("button", name="No skips left")
+            expect(no_skips).to_be_visible()
+            expect(no_skips).to_be_disabled()
+            check("a player with no skips left cannot give up a turn")
+
             # --- wildcard: seed a state where the player on turn must replay a spent letter ---
             page.evaluate(
                 """async () => {
@@ -189,6 +268,7 @@ def main() -> int:
                 return page.evaluate("JSON.parse(localStorage.getItem('crg.game.v1'))")
 
             plies = 0
+            skips_taken = 0
             for _ in range(400):
                 if page.locator(".outcome").count():
                     break
@@ -200,15 +280,22 @@ def main() -> int:
                         return moves.length ? moves[0] : null;
                     }"""
                 )
-                assert move is not None, "engine says no moves but the UI shows no result"
                 before = len(state()["history"])
-                page.locator("button.tile").nth(move["pos"]).click()
-                page.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
-                # A spent letter opens the wildcard prompt instead of moving.
-                if page.locator(".confirm-wildcard").count():
-                    page.get_by_role(
-                        "button", name=f"Spend wildcard on {move['letter'].upper()}"
-                    ).click()
+                if move is None:
+                    # No legal move but the game is alive, so a skip is the only
+                    # action left: give up the turn and let the bot play.
+                    expect(page.get_by_role("alert").first).to_contain_text("No legal move left")
+                    page.get_by_role("button", name="Give up turn").click()
+                    page.locator(".confirm .danger").click()
+                    skips_taken += 1
+                else:
+                    page.locator("button.tile").nth(move["pos"]).click()
+                    page.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
+                    # A spent letter opens the wildcard prompt instead of moving.
+                    if page.locator(".confirm-wildcard").count():
+                        page.get_by_role(
+                            "button", name=f"Spend wildcard on {move['letter'].upper()}"
+                        ).click()
                 after = len(state()["history"])
                 assert after == before + 1, f"UI did not advance the game at ply {plies}"
                 plies += 1
@@ -216,7 +303,10 @@ def main() -> int:
             expect(page.locator(".outcome h2")).to_contain_text("wins")
             final = state()
             assert final["outcome"]["reason"] == "stuck", final["outcome"]
-            check(f"a game played to exhaustion over {plies} plies shows a winner")
+            check(
+                f"a game played to exhaustion over {plies} plies "
+                f"({skips_taken} forced skips) shows a winner"
+            )
 
             page.screenshot(path=str(shots / "04-result.png"), full_page=True)
 

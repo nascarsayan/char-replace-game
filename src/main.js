@@ -1,5 +1,5 @@
 import { html, render, useEffect, useState } from '../vendor/preact-standalone.module.js';
-import { applyMove, createGame, resign } from './game.js';
+import { applyMove, applySkip, createGame, resign } from './game.js';
 import { buildShareUrl, readGameFromLocation, writeGameToLocation } from './link.js';
 import { createRoomCode, isRoomCode, normaliseRoomCode } from './net.js';
 import * as store from './store.js';
@@ -158,6 +158,7 @@ function App() {
       youAre=${sharedSeat}
       locked=${sharedSeat !== null && shared.game.turn !== sharedSeat}
       onMove=${(pos, letter) => commitShared(applyMove(shared.game, pos, letter))}
+      onSkip=${() => commitShared(applySkip(shared.game))}
       onResign=${(playerIdx) => commitShared(resign(shared.game, playerIdx))}
       onRematch=${() =>
         commitShared(createGame(shared.game.players[0].name, shared.game.players[1].name))}
@@ -170,6 +171,7 @@ function App() {
       game=${game}
       shareUrl=${buildShareUrl(game)}
       onMove=${(pos, letter) => commit(applyMove(game, pos, letter))}
+      onSkip=${() => commit(applySkip(game))}
       onResign=${(playerIdx) => commit(resign(game, playerIdx))}
       onRematch=${() => startGame(game.players[0].name, game.players[1].name)}
       onExit=${leaveGame}

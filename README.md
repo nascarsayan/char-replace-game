@@ -21,12 +21,29 @@ not online at the same time.
    **27 cards** in total.
 5. The wildcard lets you replay one letter you have already spent. The result
    still has to be a real word. You get one, ever.
-6. The first player with no legal move left loses.
+6. **Stuck?** Give up the turn. A bot plays the next available word for you — and
+   the letter it uses is struck off **both** racks, which is what makes it cost
+   something. You get 5 of these per game.
+7. You lose when you have neither a legal move nor a skip left.
 
 Both racks are visible at all times: knowing which letters your opponent has
 burned, and whether they still hold their wildcard, is the game.
 
+Every word played shows its meaning, on the board and in the move list — with a
+5,454-word Scrabble list, a good half of the game is words you have never met.
+
 Keyboard: `1`–`4` or `←`/`→` pick a slot, a letter key plays it, `Esc` clears.
+
+### Giving up a turn
+
+A skip is a lifeline, not a free pass:
+
+- The bot plays the first unplayed word reachable from the current one. It ignores
+  rack limits, so a skip works even when your own cards have run dry.
+  Deliberately deterministic — share links and live peers replay skips rather
+  than transmitting what the bot chose, so both sides must compute it identically.
+- Only the player who gave up spends a skip, but **both** players lose the letter.
+- 5 skips each. Run out of both moves and skips and you lose.
 
 ## Playing live
 
@@ -98,12 +115,14 @@ modules, which browsers only load over http(s).
 | `src/game.js` | All the rules, as pure functions over a JSON-serialisable state. No DOM. |
 | `src/words.js` | Generated dictionary: the 5,454 four-letter SOWPODS words. |
 | `src/store.js` | localStorage: users, session, saved local game. |
+| `src/definitions.js` | Lazily fetches the definition file; degrades quietly if it fails. |
 | `src/link.js` | Encodes a game into a shareable URL fragment, and validates one on the way back in. |
 | `src/net.js` | Live games: joins a room over WebRTC and validates every position that arrives. |
 | `src/seats.js` | The per-seat glyphs that say which side is which. |
 | `src/components/` | Preact components, written with `htm` tagged templates (no JSX, no transpiler). |
 | `vendor/` | Pinned copies of Pico CSS, preact+htm and Trystero, so the page needs no CDN at runtime. |
-| `tools/` | Dictionary generator and the three test suites. |
+| `assets/definitions.json` | Generated glosses, ~267 KiB, fetched in the background rather than blocking play. |
+| `tools/` | The two data generators and the four test suites. |
 
 State lives in one plain object that round-trips through `JSON.stringify`, which
 is why an unfinished game survives a reload.
@@ -142,7 +161,7 @@ host and join a room and trade moves for real:
 python3 tools/test-live.py
 ```
 
-## Regenerating the dictionary
+## Regenerating the word data
 
 ```sh
 python3 tools/build-words.py                    # downloads SOWPODS
@@ -151,4 +170,16 @@ python3 tools/build-words.py --source words.txt # or use a local list
 
 The word list is filtered to four-letter entries and written out as a JS module.
 Mean branching factor is about 13 one-letter neighbours per word, which is what
-keeps games going for roughly 40–50 moves.
+keeps games going for roughly 40–60 moves.
+
+```sh
+python3 tools/build-definitions.py              # downloads both sources (~80 MB)
+```
+
+Definitions cover **3,800 of the 5,454 words (70%)**. Where a word is only in the
+list as an inflection ("aces"), the gloss comes from its base form and says so.
+Anything still unresolved is left out, and the board says the word has no bundled
+definition rather than inventing one.
+
+Sources and licences — including the CC BY-SA 4.0 terms that apply to
+`assets/definitions.json` — are in [ATTRIBUTION.md](ATTRIBUTION.md).

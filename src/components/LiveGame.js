@@ -1,5 +1,5 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-standalone.module.js';
-import { applyMove, createGame, resign } from '../game.js';
+import { applyMove, applySkip, createGame, resign } from '../game.js';
 import { connect } from '../net.js';
 import { Board } from './Board.js';
 import { WaitingRoom } from './LiveLobby.js';
@@ -108,6 +108,7 @@ export function LiveGame({ role, roomCode, me, onExit }) {
     locked=${game.turn !== seat || peers === 0}
     status=${status}
     onMove=${(pos, letter) => push(applyMove(game, pos, letter))}
+    onSkip=${() => push(applySkip(game))}
     onResign=${(playerIdx) => push(resign(game, playerIdx))}
     onRematch=${() => push(createGame(game.players[0].name, game.players[1].name))}
     onExit=${onExit}

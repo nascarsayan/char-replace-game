@@ -8,10 +8,10 @@
 // second source of truth to drift. Decoding replays through applyMove(), which
 // means a truncated or hand-edited link is rejected instead of loading a
 // board that could not have arisen from legal play.
-import { WORD_LEN, applyMove, createGame, resign } from './game.js';
+import { WORD_LEN, applyMove, applySkip, createGame, resign } from './game.js';
 import { WORD_SET } from './words.js';
 
-const VERSION = 1;
+const VERSION = 2;
 export const FRAGMENT_KEY = 'g';
 
 function toBase64Url(text) {
@@ -28,9 +28,16 @@ function fromBase64Url(encoded) {
   return new TextDecoder().decode(bytes);
 }
 
+// Two characters per move: the 1-based slot then the letter, or "0-" for a
+// skip. Fixed width keeps parsing trivial, and a skip needs no letter recorded
+// because the bot's choice is recomputed deterministically on the way back in.
+const SKIP_TOKEN = '0-';
+
 /** Moves are two characters each: the 1-based slot, then the letter. */
 function encodeMoves(history) {
-  return history.map((move) => `${move.pos + 1}${move.letter}`).join('');
+  return history
+    .map((move) => (move.kind === 'skip' ? SKIP_TOKEN : `${move.pos + 1}${move.letter}`))
+    .join('');
 }
 
 function decodeMoves(packed) {
@@ -38,10 +45,15 @@ function decodeMoves(packed) {
   if (packed.length % 2 !== 0) throw new Error('truncated move list');
   const moves = [];
   for (let i = 0; i < packed.length; i += 2) {
-    const pos = Number(packed[i]) - 1;
-    const letter = packed[i + 1];
+    const pair = packed.slice(i, i + 2);
+    if (pair === SKIP_TOKEN) {
+      moves.push({ skip: true });
+      continue;
+    }
+    const pos = Number(pair[0]) - 1;
+    const letter = pair[1];
     if (!Number.isInteger(pos) || pos < 0 || pos >= WORD_LEN) {
-      throw new Error(`move ${moves.length + 1} names slot ${packed[i]}`);
+      throw new Error(`move ${moves.length + 1} names slot ${pair[0]}`);
     }
     if (!/^[a-z]$/.test(letter)) throw new Error(`move ${moves.length + 1} is not a letter`);
     moves.push({ pos, letter });
@@ -95,7 +107,7 @@ export function decodeGame(encoded) {
   // cannot be smuggled in by editing the link.
   for (const [index, move] of decodeMoves(packedMoves).entries()) {
     try {
-      game = applyMove(game, move.pos, move.letter);
+      game = move.skip ? applySkip(game) : applyMove(game, move.pos, move.letter);
     } catch (err) {
       throw new Error(`Move ${index + 1} in this link is not legal: ${err.message}`);
     }
