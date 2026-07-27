@@ -199,14 +199,46 @@ test('a game mixing moves and skips plays out and round-trips', () => {
   assert.deepEqual(decodeGame(encodeGame(game)), game);
 });
 
-test('links made by an older format are refused, not misread', () => {
+test('older links still play when they contain no skips', () => {
   const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  // Version 2 encoded skips whose bot letter ignored the giver's rack, so
-  // replaying one now would land on a different board.
+  const current = createGame('A', 'B', 'cold');
+  const expected = applyMove(applyMove(current, 0, 'b'), 3, 'e'); // cold -> bold -> bole
+
+  // Only the meaning of a *skip* changed, so a skip-free older list is identical.
+  for (const version of [1, 2]) {
+    const revived = decodeGame(b64([version, 'A', 'B', 'cold', '1b4e', null]));
+    assert.deepEqual(revived, expected, `version ${version} should replay unchanged`);
+  }
+
+  // Writing always uses the current format, so a game read from an old link is
+  // handed on as a current one.
+  const passedOn = decodeGame(b64([2, 'A', 'B', 'cold', '1b4e', null]));
+  const reencoded = JSON.parse(Buffer.from(encodeGame(passedOn), 'base64url').toString());
+  assert.equal(reencoded[0], 3, 'must be re-encoded as the current version');
+});
+
+test('an older link containing a skip is refused with the reason', () => {
+  const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  // Back then the bot could play a letter the giver had spent; it no longer can,
+  // so this would replay onto a different board.
   for (const version of [1, 2]) {
     assert.throws(
       () => decodeGame(b64([version, 'A', 'B', 'cold', '0-', null])),
+      /replay differently|cannot be continued/i,
+    );
+  }
+  // A skip recorded under the current rule is fine.
+  const withSkip = applySkip(createGame('A', 'B', 'cold'));
+  assert.deepEqual(decodeGame(encodeGame(withSkip)), withSkip);
+});
+
+test('versions outside the readable range are refused', () => {
+  const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  for (const version of [0, 4, 99, 'two', null]) {
+    assert.throws(
+      () => decodeGame(b64([version, 'A', 'B', 'cold', '', null])),
       /different version/i,
+      `version ${version} should be refused`,
     );
   }
 });
