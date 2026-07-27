@@ -301,6 +301,47 @@ button.tile[aria-checked='true'] {
   min-height: 2.75rem;
 }
 
+/* ---------- share ---------- */
+
+.share {
+  padding: 1rem;
+  margin-top: 1.5rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--crg-radius);
+  background: var(--pico-card-sectioning-background-color);
+}
+
+.share h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.share-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.share-row input {
+  flex: 1 1 16rem;
+  min-height: 2.75rem;
+  margin: 0;
+  font-family: var(--pico-font-family-monospace);
+  font-size: 0.85rem;
+}
+
+.share-row button {
+  width: auto;
+  min-width: 8rem;
+  min-height: 2.75rem;
+  margin: 0;
+}
+
+.share p {
+  margin: 0.5rem 0 0;
+  color: var(--pico-muted-color);
+}
+
 /* ---------- racks ---------- */
 
 .racks {

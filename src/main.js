@@ -1,5 +1,6 @@
-import { html, render, useState } from '../vendor/preact-standalone.module.js';
+import { html, render, useEffect, useState } from '../vendor/preact-standalone.module.js';
 import { applyMove, createGame, resign } from './game.js';
+import { buildShareUrl, readGameFromLocation, writeGameToLocation } from './link.js';
 import * as store from './store.js';
 import { Board } from './components/Board.js';
 import { Gate } from './components/Gate.js';
@@ -11,8 +12,20 @@ function App() {
   const [me, setMe] = useState(store.getSession);
   const [game, setGame] = useState(store.loadGame);
   const [playing, setPlaying] = useState(false);
+  // A game arriving by link: { game } when it decodes, { error } when it does not.
+  const [shared, setShared] = useState(readGameFromLocation);
 
-  /** Single write path: state and localStorage never drift apart. */
+  // Pasting a different link into the same tab changes the fragment without a
+  // reload, so the position has to be re-read.
+  useEffect(() => {
+    function onHashChange() {
+      setShared(readGameFromLocation());
+    }
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  /** Local games: one write path, so state and localStorage never drift apart. */
   function commit(next) {
     setGame(next);
     store.saveGame(next);
@@ -22,6 +35,16 @@ function App() {
         next.players[next.outcome.loser].name,
       );
     }
+  }
+
+  /**
+   * Shared games live in the URL rather than localStorage: the link is the only
+   * copy, so a reload keeps the position, and the local player list stays free
+   * of names the other side typed.
+   */
+  function commitShared(next) {
+    setShared({ game: next });
+    writeGameToLocation(next);
   }
 
   function startGame(nameA, nameB) {
@@ -37,14 +60,39 @@ function App() {
     }
   }
 
+  function leaveSharedGame() {
+    // Drop the fragment, or the lobby is immediately replaced by the link again.
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    setShared(null);
+  }
+
   let screen;
   if (!unlocked) {
     screen = html`<${Gate} onUnlocked=${() => setUnlocked(true)} />`;
+  } else if (shared && shared.error) {
+    screen = html`<div class="panel">
+      <h2>That link did not work</h2>
+      <p class="error" role="alert">${shared.error}</p>
+      <p>Ask your opponent to send the whole link again — chat apps like to cut them short.</p>
+      <button type="button" class="big" onClick=${leaveSharedGame}>Start a game instead</button>
+    </div>`;
+  } else if (shared && shared.game) {
+    // A shared link needs no local account: the names travel with the position.
+    screen = html`<${Board}
+      game=${shared.game}
+      shareUrl=${buildShareUrl(shared.game)}
+      onMove=${(pos, letter) => commitShared(applyMove(shared.game, pos, letter))}
+      onResign=${(playerIdx) => commitShared(resign(shared.game, playerIdx))}
+      onRematch=${() =>
+        commitShared(createGame(shared.game.players[0].name, shared.game.players[1].name))}
+      onExit=${leaveSharedGame}
+    />`;
   } else if (!me) {
     screen = html`<${SignIn} onSignedIn=${setMe} />`;
   } else if (playing && game) {
     screen = html`<${Board}
       game=${game}
+      shareUrl=${buildShareUrl(game)}
       onMove=${(pos, letter) => commit(applyMove(game, pos, letter))}
       onResign=${(playerIdx) => commit(resign(game, playerIdx))}
       onRematch=${() => startGame(game.players[0].name, game.players[1].name)}
@@ -75,7 +123,7 @@ function App() {
     <main>${screen}</main>
     <footer class="site-foot">
       <small>
-        Two players, one screen. Everything is stored in this browser.
+        Play side by side, or send the link after each move.
         ${unlocked
           ? html`<button
               type="button"

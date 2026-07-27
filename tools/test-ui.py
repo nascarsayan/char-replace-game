@@ -87,7 +87,7 @@ def main() -> int:
             # --- start a game ---
             page.get_by_label("Opponent").fill("Riya")
             page.get_by_role("button", name="Play", exact=True).click()
-            expect(page.get_by_role("status")).to_contain_text("Sayan's turn.")
+            expect(page.get_by_role("status").first).to_contain_text("Sayan's turn.")
             expect(page.locator("button.tile")).to_have_count(4)
             expect(page.locator("section.rack")).to_have_count(2)
             expect(page.locator("section.rack").first.locator(".card")).to_have_count(26)
@@ -110,7 +110,7 @@ def main() -> int:
             page.locator("button.tile").first.click()
             page.locator(f'button.card[aria-label^="Play {bad},"]').click()
             expect(page.get_by_role("alert").first).to_contain_text("not in the dictionary")
-            expect(page.get_by_role("status")).to_contain_text("Sayan's turn.")
+            expect(page.get_by_role("status").first).to_contain_text("Sayan's turn.")
             check("an invalid word is refused and the turn does not pass")
 
             # --- a real move, driven by the engine's own legal-move list ---
@@ -124,7 +124,7 @@ def main() -> int:
             page.locator("button.tile").nth(move["pos"]).click()
             page.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
             expect(page.locator("button.tile span").nth(move["pos"])).to_have_text(move["letter"].upper())
-            expect(page.get_by_role("status")).to_contain_text("Riya's turn.")
+            expect(page.get_by_role("status").first).to_contain_text("Riya's turn.")
             check(f"a legal move plays ({word} -> {move['word']}) and passes the turn")
 
             # Sayan's rack is now the read-only one; the spent letter must show as spent there.
@@ -146,7 +146,7 @@ def main() -> int:
             page.locator("body").click(position={"x": 5, "y": 5})
             page.keyboard.press(str(move2["pos"] + 1))
             page.keyboard.press(move2["letter"])
-            expect(page.get_by_role("status")).to_contain_text("Sayan's turn.")
+            expect(page.get_by_role("status").first).to_contain_text("Sayan's turn.")
             expect(page.locator("button.tile span").nth(move2["pos"])).to_have_text(move2["letter"].upper())
             check("digit-then-letter keyboard entry plays a move")
 
@@ -178,7 +178,7 @@ def main() -> int:
             page.locator('button.card[aria-label^="Play b,"]').click()
             page.get_by_role("button", name="Spend wildcard on B").click()
             expect(page.locator("button.tile span").first).to_have_text("B")
-            expect(page.get_by_role("status")).to_contain_text("Riya's turn.")
+            expect(page.get_by_role("status").first).to_contain_text("Riya's turn.")
             sayan_rack = page.locator("section.rack", has=page.get_by_role("heading", name="Sayan"))
             expect(sayan_rack.locator(".wildcard-state")).to_have_text("☆ Wildcard used")
             expect(sayan_rack.locator(".rack-count")).to_contain_text("25 of 27")
@@ -248,6 +248,144 @@ def main() -> int:
             expect(page.get_by_role("heading", name="Enter the password")).to_be_visible()
             check("Lock returns to the password gate")
 
+            # ================================================================
+            # Remote play: two independent browser profiles passing one link.
+            # Separate contexts means separate localStorage, so the second
+            # player genuinely has no local copy of the game.
+            # ================================================================
+            ctx_a = browser.new_context(viewport={"width": 1280, "height": 1400})
+            ctx_b = browser.new_context(viewport={"width": 1280, "height": 1400})
+            for ctx in (ctx_a, ctx_b):
+                ctx.on("weberror", lambda e: problems.append(f"weberror: {e.error}"))
+            alice, bob = ctx_a.new_page(), ctx_b.new_page()
+            for pg in (alice, bob):
+                pg.on(
+                    "console",
+                    lambda m: problems.append(f"console.{m.type}: {m.text}")
+                    if m.type == "error"
+                    else None,
+                )
+                pg.on("pageerror", lambda e: problems.append(f"pageerror: {e}"))
+
+            def unlock(pg, url=base):
+                pg.goto(url)
+                if pg.get_by_label("Password").count():
+                    pg.get_by_label("Password").fill(PASSWORD)
+                    pg.get_by_role("button", name="Unlock").click()
+
+            def engine_move(pg):
+                return pg.evaluate(
+                    """async () => {
+                        const { legalMoves } = await import('./src/game.js');
+                        const { readGameFromLocation } = await import('./src/link.js');
+                        const shared = readGameFromLocation();
+                        const game = shared ? shared.game
+                                            : JSON.parse(localStorage.getItem('crg.game.v1'));
+                        return legalMoves(game)[0];
+                    }"""
+                )
+
+            def play(pg, move):
+                pg.locator("button.tile").nth(move["pos"]).click()
+                pg.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
+                if pg.locator(".confirm-wildcard").count():
+                    pg.get_by_role(
+                        "button", name=f"Spend wildcard on {move['letter'].upper()}"
+                    ).click()
+
+            # Alice starts a game locally and takes the first turn.
+            unlock(alice)
+            alice.get_by_label("New player name").fill("Alice")
+            alice.get_by_role("button", name="Create and continue").click()
+            alice.get_by_label("Opponent").fill("Bob")
+            alice.get_by_role("button", name="Play", exact=True).click()
+            expect(alice.get_by_role("status").first).to_contain_text("Alice's turn.")
+            play(alice, engine_move(alice))
+            expect(alice.get_by_role("status").first).to_contain_text("Bob's turn.")
+
+            expect(alice.locator(".share h3")).to_contain_text("Bob is up")
+            invite = alice.locator("#share-url").input_value()
+            assert invite.startswith(base) and "#g=" in invite, invite
+            word_after_alice = alice.evaluate(
+                "[...document.querySelectorAll('button.tile span')].map(s=>s.textContent).join('')"
+            )
+            check(f"after moving, the board offers a link for the opponent ({len(invite)} chars)")
+            alice.screenshot(path=str(shots / "06-share-link.png"), full_page=True)
+
+            # Bob opens the link in a profile that has never seen this game.
+            unlock(bob, invite)
+            assert bob.evaluate("localStorage.getItem('crg.game.v1')") is None, (
+                "the shared game must not be written into the joiner's local storage"
+            )
+            expect(bob.locator("button.tile")).to_have_count(4)
+            assert (
+                bob.evaluate(
+                    "[...document.querySelectorAll('button.tile span')].map(s=>s.textContent).join('')"
+                )
+                == word_after_alice
+            )
+            expect(bob.get_by_role("status").first).to_contain_text("Bob's turn.")
+            check("opening the link joins the game at the same position, with no local account")
+
+            # Both sides must agree on the spent cards, which travel only implicitly.
+            def rack_state(pg, name):
+                return pg.evaluate(
+                    """(name) => {
+                        const rack = [...document.querySelectorAll('section.rack')]
+                          .find(r => r.querySelector('h3').textContent === name);
+                        return {
+                          count: rack.querySelector('.rack-count').textContent.trim(),
+                          spent: [...rack.querySelectorAll('.card')]
+                            .filter(c => c.dataset.state !== 'ready')
+                            .map(c => c.textContent.trim()),
+                          wildcard: rack.querySelector('.wildcard-state').textContent.trim(),
+                        };
+                    }""",
+                    name,
+                )
+
+            for name in ("Alice", "Bob"):
+                assert rack_state(alice, name) == rack_state(bob, name), (
+                    f"{name}'s rack differs between the two players"
+                )
+            check("both players see identical racks, spent cards and wildcard state")
+
+            # Bob replies, and hands a fresh link back to Alice.
+            play(bob, engine_move(bob))
+            expect(bob.get_by_role("status").first).to_contain_text("Alice's turn.")
+            reply = bob.locator("#share-url").input_value()
+            assert reply != invite, "the link must change after a move"
+            assert bob.evaluate("location.hash").startswith("#g="), "the address bar must track the position"
+            check("the reply produces a new link and updates the address bar")
+
+            # A reload of Bob's tab keeps the position: the URL is the only copy.
+            bob.reload()
+            expect(bob.locator("button.tile")).to_have_count(4)
+            expect(bob.get_by_role("status").first).to_contain_text("Alice's turn.")
+            check("reloading a shared game keeps the position")
+
+            # Alice opens the reply and sees Bob's move in the history.
+            unlock(alice, reply)
+            expect(alice.get_by_role("status").first).to_contain_text("Alice's turn.")
+            expect(alice.locator(".move-list li")).to_have_count(2)
+            expect(alice.locator(".move-list li").first).to_contain_text("Bob")
+            check("the opponent's move arrives in the history when the link is opened")
+
+            # A link mangled in transit is refused with a reason, not half-loaded.
+            unlock(bob, invite[: len(invite) - 6])
+            expect(bob.get_by_role("heading", name="That link did not work")).to_be_visible()
+            expect(bob.get_by_role("alert")).not_to_be_empty()
+            expect(bob.locator("button.tile")).to_have_count(0)
+            check("a truncated link shows a reason instead of a broken board")
+            bob.screenshot(path=str(shots / "07-bad-link.png"), full_page=True)
+
+            bob.get_by_role("button", name="Start a game instead").click()
+            expect(bob.get_by_role("heading", name="Who are you?")).to_be_visible()
+            assert bob.evaluate("location.hash") == "", "leaving must clear the fragment"
+            check("leaving a bad link clears the fragment and returns to sign-in")
+
+            ctx_a.close()
+            ctx_b.close()
             browser.close()
     finally:
         httpd.shutdown()
