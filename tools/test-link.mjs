@@ -1,7 +1,17 @@
 // Share-link encoding tests for src/link.js:
 //   node tools/test-link.mjs
 import assert from 'node:assert/strict';
-import { SKIPS_PER_PLAYER, applyMove, applySkip, canSkip, createGame, legalMoves, resign } from '../src/game.js';
+import {
+  SKIPS_PER_PLAYER,
+  applyMove,
+  applySkip,
+  botMove,
+  canSkip,
+  createGame,
+  legacyBotMove,
+  legalMoves,
+  resign,
+} from '../src/game.js';
 import {
   buildShareUrl,
   decodeGame,
@@ -214,27 +224,81 @@ test('older links still play when they contain no skips', () => {
   // handed on as a current one.
   const passedOn = decodeGame(b64([2, 'A', 'B', 'cold', '1b4e', null]));
   const reencoded = JSON.parse(Buffer.from(encodeGame(passedOn), 'base64url').toString());
-  assert.equal(reencoded[0], 3, 'must be re-encoded as the current version');
+  assert.equal(reencoded[0], 4, 'must be re-encoded as the current version');
 });
 
-test('an older link containing a skip is refused with the reason', () => {
+test('an older skip replays with the bot rule of its own era', () => {
   const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  // Back then the bot could play a letter the giver had spent; it no longer can,
-  // so this would replay onto a different board.
-  for (const version of [1, 2]) {
-    assert.throws(
-      () => decodeGame(b64([version, 'A', 'B', 'cold', '0-', null])),
-      /replay differently|cannot be continued/i,
-    );
-  }
-  // A skip recorded under the current rule is fine.
+
+  // Version 2's bot ignored rack limits. Spend the letter it would have chosen
+  // and the two eras diverge, which is exactly what has to be honoured.
+  const seed = createGame('A', 'B', 'cold');
+  assert.equal(legacyBotMove(seed).letter, 'b');
+  const cornered = createGame('A', 'B', 'cold');
+  cornered.players[0].spent = ['b'];
+  assert.equal(legacyBotMove(cornered).letter, 'b', 'the old bot ignored the rack');
+  assert.notEqual(botMove(cornered).letter, 'b', "today's bot does not");
+
+  // A version 2 skip is replayed with the old rule...
+  const old = decodeGame(b64([2, 'A', 'B', 'cold', '0-', null]));
+  assert.equal(old.word, 'bold');
+  assert.equal(old.history[0].kind, 'skip');
+  // ...and a version 3 one with the rule that was current then, which is today's.
+  const newer = decodeGame(b64([3, 'A', 'B', 'cold', '0-', null]));
+  assert.equal(newer.word, 'bold');
+
+  // A skip recorded under the current rules round-trips as ever.
   const withSkip = applySkip(createGame('A', 'B', 'cold'));
   assert.deepEqual(decodeGame(encodeGame(withSkip)), withSkip);
 });
 
+test('a version 4 skip records its letter rather than recomputing it', () => {
+  const game = applySkip(createGame('A', 'B', 'cold'));
+  const payload = JSON.parse(Buffer.from(encodeGame(game), 'base64url').toString());
+  assert.equal(payload[0], 4);
+  // Uppercase marks the skip and keeps the token two characters wide.
+  assert.equal(payload[4], '1B');
+  assert.deepEqual(decodeGame(encodeGame(game)), game);
+});
+
+// A real version 2 game, 52 plies from HOTS, whose last two skipped turns were
+// only legal because a skip could then rescue a player with no move. Kept as a
+// fixture because that situation is far easier to encounter than to construct.
+const LEGACY_GAME_MOVES =
+  '2i1t1w1f1r4e1z1v3v3c3n1l3k2u1y1j1p1b3t1m1j3r1c4d4l1g1b4p4g4k1m2i1d3n1f4o4s1z1h1w4o4y4e1a1m1s2a3x0-3v0-1h';
+
+test('a real game that depended on the old end rule still loads', () => {
+  const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const game = decodeGame(b64([2, 'A', 'B', 'hots', LEGACY_GAME_MOVES, null]));
+
+  assert.equal(game.history.length, 52);
+  assert.equal(game.word, 'have');
+  assert.equal(game.history.filter((move) => move.kind === 'skip').length, 2);
+  assert.deepEqual(game.players.map((p) => p.skipsUsed), [2, 0]);
+
+  // Today's rule finishes it: the player on turn has nothing left to play.
+  assert.equal(legalMoves(game).length, 0);
+  assert.deepEqual(game.outcome, { loser: 0, winner: 1, reason: 'stuck' });
+
+  // The flag is load-bearing here, and keeps the game readable once re-encoded.
+  assert.equal(game.legacyRules, true);
+  const reencoded = encodeGame(game);
+  assert.equal(JSON.parse(Buffer.from(reencoded, 'base64url').toString())[6], true);
+  assert.deepEqual(decodeGame(reencoded), game);
+});
+
+test('an older game that never needed the old rule comes back unflagged', () => {
+  const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  // The same fixture, cut short before the position went dead.
+  const early = decodeGame(b64([2, 'A', 'B', 'hots', LEGACY_GAME_MOVES.slice(0, 40), null]));
+  assert.equal(early.legacyRules, undefined, 'no rescue happened, so no flag');
+  assert.equal(JSON.parse(Buffer.from(encodeGame(early), 'base64url').toString()).length, 6);
+  assert.deepEqual(decodeGame(encodeGame(early)), early);
+});
+
 test('versions outside the readable range are refused', () => {
   const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  for (const version of [0, 4, 99, 'two', null]) {
+  for (const version of [0, 5, 99, 'two', null]) {
     assert.throws(
       () => decodeGame(b64([version, 'A', 'B', 'cold', '', null])),
       /different version/i,

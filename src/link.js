@@ -8,16 +8,31 @@
 // second source of truth to drift. Decoding replays through applyMove(), which
 // means a truncated or hand-edited link is rejected instead of loading a
 // board that could not have arisen from legal play.
-import { WORD_LEN, applyMove, applySkip, createGame, resign } from './game.js';
+import {
+  WORD_LEN,
+  applyMove,
+  applyRecordedSkip,
+  botMove,
+  createGame,
+  legacyBotMove,
+  legalMoves,
+  resign,
+  settle,
+} from './game.js';
 import { WORD_SET } from './words.js';
 
-// Version 3 changed one thing: the bot's letter when a turn is given up must now
-// be one the skipping player still holds. That only alters how a *skip* replays,
-// so an older link is still read as long as it contains no skips — which is most
-// of them, and means an old link or a room written by a tab that has not been
-// reloaded keeps working. An older link that does contain a skip would replay
-// onto a different board, so that one is refused with the reason.
-const VERSION = 3;
+// Every version is still readable, and each one's skips are replayed with the bot
+// rule that was in force when they were recorded:
+//
+//   1  no skips existed yet
+//   2  the bot ignored rack limits            -> legacyBotMove
+//   3  the bot had to use a letter the giver still held -> botMove
+//   4  the skip records the letter it used, so nothing is recomputed
+//
+// Version 4 exists to end that pattern: recomputing the bot's choice meant any
+// change to how it chooses stranded games already in progress. Writing the letter
+// down costs nothing and makes a recorded game replay the same way for good.
+const VERSION = 4;
 const OLDEST_READABLE_VERSION = 1;
 export const FRAGMENT_KEY = 'g';
 
@@ -35,15 +50,19 @@ function fromBase64Url(encoded) {
   return new TextDecoder().decode(bytes);
 }
 
-// Two characters per move: the 1-based slot then the letter, or "0-" for a
-// skip. Fixed width keeps parsing trivial, and a skip needs no letter recorded
-// because the bot's choice is recomputed deterministically on the way back in.
-const SKIP_TOKEN = '0-';
+// Two characters per move: the 1-based slot, then the letter. An UPPERCASE letter
+// marks a skip, which keeps the width fixed and the parsing trivial while still
+// recording what the bot played. Versions before 4 wrote "0-" for a skip and left
+// the letter to be recomputed.
+const LEGACY_SKIP_TOKEN = '0-';
 
-/** Moves are two characters each: the 1-based slot, then the letter. */
 function encodeMoves(history) {
   return history
-    .map((move) => (move.kind === 'skip' ? SKIP_TOKEN : `${move.pos + 1}${move.letter}`))
+    .map((move) =>
+      move.kind === 'skip'
+        ? `${move.pos + 1}${move.letter.toUpperCase()}`
+        : `${move.pos + 1}${move.letter}`,
+    )
     .join('');
 }
 
@@ -53,7 +72,8 @@ function decodeMoves(packed) {
   const moves = [];
   for (let i = 0; i < packed.length; i += 2) {
     const pair = packed.slice(i, i + 2);
-    if (pair === SKIP_TOKEN) {
+    if (pair === LEGACY_SKIP_TOKEN) {
+      // Pre-version-4 skip: the letter has to be recomputed by the caller.
       moves.push({ skip: true });
       continue;
     }
@@ -62,8 +82,10 @@ function decodeMoves(packed) {
     if (!Number.isInteger(pos) || pos < 0 || pos >= WORD_LEN) {
       throw new Error(`move ${moves.length + 1} names slot ${pair[0]}`);
     }
-    if (!/^[a-z]$/.test(letter)) throw new Error(`move ${moves.length + 1} is not a letter`);
-    moves.push({ pos, letter });
+    if (!/^[a-zA-Z]$/.test(letter)) throw new Error(`move ${moves.length + 1} is not a letter`);
+    // Uppercase marks a skip that recorded the letter the bot used.
+    const skip = letter !== letter.toLowerCase();
+    moves.push({ pos, letter: letter.toLowerCase(), skip });
   }
   return moves;
 }
@@ -77,6 +99,9 @@ export function encodeGame(game) {
     encodeMoves(game.history),
     game.outcome && game.outcome.reason === 'resigned' ? game.outcome.loser : null,
   ];
+  // Games that only make sense under the pre-version-3 end rule carry a flag, so
+  // that re-encoding one does not produce a link that can no longer be replayed.
+  if (game.legacyRules) payload.push(true);
   return toBase64Url(JSON.stringify(payload));
 }
 
@@ -94,16 +119,11 @@ export function decodeGame(encoded) {
   }
   if (!Array.isArray(payload) || payload.length < 5) throw new Error('This link is not a game.');
 
-  const [version, nameA, nameB, startWord, packedMoves, resignedBy] = payload;
+  const [version, nameA, nameB, startWord, packedMoves, resignedBy, legacyFlag] = payload;
   if (!Number.isInteger(version) || version < OLDEST_READABLE_VERSION || version > VERSION) {
     throw new Error(`This link was made by a different version (${version}).`);
   }
-  if (version < VERSION && typeof packedMoves === 'string' && packedMoves.includes(SKIP_TOKEN)) {
-    throw new Error(
-      'This game was recorded before the bot stopped using wildcards, and one of its ' +
-        'skipped turns would now replay differently. It cannot be continued.',
-    );
-  }
+
   if (typeof nameA !== 'string' || typeof nameB !== 'string' || !nameA || !nameB) {
     throw new Error('This link is missing a player name.');
   }
@@ -118,18 +138,52 @@ export function decodeGame(encoded) {
 
   let game = createGame(nameA, nameB, startWord);
 
+  // Whichever bot rule was in force when this game was recorded. Only needed for
+  // skips written before version 4, which did not record their letter.
+  const resolveSkip = version >= 3 ? botMove : legacyBotMove;
+  // Versions 1 and 2 also ended the game later: back then a skip could rescue a
+  // player with no move, so replaying under today's rule would declare the game
+  // over partway through one that really did carry on. The old rule is used for
+  // the replay, and the current one applied once at the end.
+  const legacyRules = version <= 2 || legacyFlag === true;
+  const options = legacyRules ? { legacyOutcome: true } : {};
+
+  // Set only if the old end rule actually kept a game alive that today's rule
+  // would have finished. Most older games never depended on it, and those come
+  // back indistinguishable from one played today.
+  let usedLegacyRescue = false;
+
   // Replaying through the real rules is the validation: an illegal sequence
   // cannot be smuggled in by editing the link.
   for (const [index, move] of decodeMoves(packedMoves).entries()) {
     try {
-      game = move.skip ? applySkip(game) : applyMove(game, move.pos, move.letter);
+      if (!move.skip) {
+        game = applyMove(game, move.pos, move.letter, options);
+      } else if (move.letter) {
+        game = applyRecordedSkip(game, move.pos, move.letter, options);
+      } else {
+        const chosen = resolveSkip(game);
+        if (!chosen) throw new Error('there is no word left for the bot to play');
+        game = applyRecordedSkip(game, chosen.pos, chosen.letter, options);
+      }
     } catch (err) {
       throw new Error(`Move ${index + 1} in this link is not legal: ${err.message}`);
+    }
+    if (legacyRules && !game.outcome && legalMoves(game).length === 0) {
+      usedLegacyRescue = true;
     }
   }
 
   if (resignedBy === 0 || resignedBy === 1) game = resign(game, resignedBy);
-  return game;
+  if (!legacyRules) return game;
+
+  // An older game replayed under its own end rule still has to face the current
+  // one before play resumes.
+  const settled = settle(game);
+  // Carry the flag only when it is load-bearing, so re-encoding cannot turn the
+  // game into a link that no longer replays.
+  if (usedLegacyRescue) settled.legacyRules = true;
+  return settled;
 }
 
 /** The absolute URL to send to the other player. */

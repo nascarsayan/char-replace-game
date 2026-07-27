@@ -125,22 +125,53 @@ export function hint(state, index = 0) {
 }
 
 /**
- * Gives up the turn. The bot plays a letter the giver still held, and that letter
- * is struck from *both* racks — from the giver always, and from the opponent only
- * if they still held it too. Nobody's wildcard is touched: a letter the opponent
- * had already spent simply stays spent.
+ * The bot rule used before the wildcard restriction: any unplayed neighbour,
+ * regardless of whose cards it needed. Kept only so games recorded under it can
+ * still be replayed exactly; nothing current calls this.
  */
-export function applySkip(state) {
+export function legacyBotMove(state) {
+  if (state.outcome) return null;
+  for (let pos = 0; pos < WORD_LEN; pos++) {
+    for (const letter of LETTERS) {
+      if (letter === state.word[pos]) continue;
+      const next = replaceAt(state.word, pos, letter);
+      if (!WORD_SET.has(next) || state.usedWords.includes(next)) continue;
+      return { pos, letter, word: next };
+    }
+  }
+  return null;
+}
+
+/**
+ * Gives up the turn, playing a specific letter on the giver's behalf.
+ *
+ * Separated from applySkip so a recorded game can be replayed with the letter it
+ * actually used rather than one recomputed from today's rules. That is what stops
+ * a future change to how the bot chooses from stranding games already in progress.
+ *
+ * The letter is struck from *both* racks — from the giver always, and from the
+ * opponent only if they still held it too. No wildcard is touched: a letter
+ * either of them had already spent simply stays spent.
+ */
+export function applyRecordedSkip(state, pos, letter, options = {}) {
   if (state.outcome) throw new Error('The game is already over.');
   const player = state.players[state.turn];
   if (skipsLeft(player) <= 0) throw new Error(`${player.name} has no skips left.`);
-  const move = botMove(state);
-  if (!move) {
-    throw new Error(
-      `${player.name} has no plain letter left for the bot to play — that needs the wildcard.`,
-    );
+  if (!Number.isInteger(pos) || pos < 0 || pos >= WORD_LEN) {
+    throw new Error('A skipped turn names a slot that does not exist.');
+  }
+  if (!LETTERS.includes(letter)) throw new Error('A skipped turn names something that is not a letter.');
+  if (state.word[pos] === letter) {
+    throw new Error(`A skipped turn would leave slot ${pos + 1} unchanged.`);
   }
 
+  const word = replaceAt(state.word, pos, letter);
+  if (!WORD_SET.has(word)) throw new Error(`"${word.toUpperCase()}" is not in the dictionary.`);
+  if (state.usedWords.includes(word)) {
+    throw new Error(`"${word.toUpperCase()}" has already been played.`);
+  }
+
+  const move = { pos, letter, word };
   const next = clone(state);
   next.players[next.turn].skipsUsed += 1;
   // Struck off whoever still had it; already-spent stays spent, costing nothing.
@@ -160,7 +191,21 @@ export function applySkip(state) {
   next.word = move.word;
   next.usedWords.push(move.word);
   next.turn = 1 - next.turn;
-  return settleOutcome(next);
+  return settleOutcome(next, options.legacyOutcome);
+}
+
+/** Gives up the turn, letting the bot pick the letter under the current rule. */
+export function applySkip(state) {
+  if (state.outcome) throw new Error('The game is already over.');
+  const player = state.players[state.turn];
+  if (skipsLeft(player) <= 0) throw new Error(`${player.name} has no skips left.`);
+  const move = botMove(state);
+  if (!move) {
+    throw new Error(
+      `${player.name} has no plain letter left for the bot to play — that needs the wildcard.`,
+    );
+  }
+  return applyRecordedSkip(state, move.pos, move.letter);
 }
 
 /**
@@ -212,7 +257,7 @@ export function legalMoves(state) {
  * Applies a move and hands the turn over. Returns a fresh state; the input is
  * left untouched so callers can keep the previous state for undo/history.
  */
-export function applyMove(state, pos, letter) {
+export function applyMove(state, pos, letter, options = {}) {
   const verdict = inspectMove(state, pos, letter);
   if (!verdict.ok) throw new Error(verdict.reason);
 
@@ -232,7 +277,7 @@ export function applyMove(state, pos, letter) {
   next.word = verdict.word;
   next.usedWords.push(verdict.word);
   next.turn = 1 - next.turn;
-  return settleOutcome(next);
+  return settleOutcome(next, options.legacyOutcome);
 }
 
 /** Marks the game lost for `playerIdx` (used by the resign button). */
@@ -246,11 +291,24 @@ export function resign(state, playerIdx) {
  * The player on turn loses the moment they have no legal move at all. A skip
  * cannot save them: the bot only plays letters they still hold, so if they have
  * nothing playable there is nothing for it to play either.
+ *
+ * `legacyOutcome` restores the older rule, where an unrestricted bot meant a skip
+ * *could* rescue a stuck player. It exists only so games recorded under that rule
+ * replay to the position they actually reached; play then continues under the
+ * current rule. See src/link.js.
  */
-function settleOutcome(state) {
+function settleOutcome(state, legacyOutcome = false) {
   if (state.outcome) return state;
-  if (legalMoves(state).length === 0) {
+  if (legalMoves(state).length > 0) return state;
+  const rescuedByOldRule =
+    legacyOutcome && skipsLeft(state.players[state.turn]) > 0 && legacyBotMove(state) !== null;
+  if (!rescuedByOldRule) {
     state.outcome = { loser: state.turn, winner: 1 - state.turn, reason: 'stuck' };
   }
   return state;
+}
+
+/** Applies the current end-of-game rule to a state built up by replay. */
+export function settle(state) {
+  return settleOutcome(clone(state));
 }
