@@ -11,7 +11,10 @@
 import { WORD_LEN, applyMove, applySkip, createGame, resign } from './game.js';
 import { WORD_SET } from './words.js';
 
-const VERSION = 2;
+// Version 3: the bot's letter must now be one the skipping player still holds,
+// so replaying an older link's skips would land on a different board. Refusing
+// them beats silently disagreeing.
+const VERSION = 3;
 export const FRAGMENT_KEY = 'g';
 
 function toBase64Url(text) {

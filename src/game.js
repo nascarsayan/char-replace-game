@@ -73,45 +73,77 @@ export function skipsLeft(player) {
   return SKIPS_PER_PLAYER - (player.skipsUsed || 0);
 }
 
-/**
- * The move the bot plays when someone gives up their turn: the first word
- * reachable from the current one that has not been played yet.
- *
- * Rack limits deliberately do not apply — a skip is the way out when your own
- * cards have run dry. It must stay deterministic, because share links and live
- * peers replay skips rather than transmitting what the bot chose.
- */
-export function botMove(state) {
-  for (let pos = 0; pos < WORD_LEN; pos++) {
-    for (const letter of LETTERS) {
-      if (letter === state.word[pos]) continue;
-      const next = replaceAt(state.word, pos, letter);
-      if (!WORD_SET.has(next) || state.usedWords.includes(next)) continue;
-      return { pos, letter, word: next };
-    }
-  }
-  return null;
+/** The moves that need no wildcard: a letter the player still holds. */
+export function normalMoves(state) {
+  return legalMoves(state).filter((move) => move.kind === 'normal');
 }
 
+/**
+ * The move the bot plays when someone gives up their turn.
+ *
+ * It may only play a card the player on turn could have played themselves — a
+ * letter they have not spent. The bot is never allowed to spend a wildcard, so
+ * this is exactly the set of normal moves, and the first one in slot-then-letter
+ * order is taken. Determinism matters: share links and live peers replay a skip
+ * rather than transmitting what the bot chose, so both sides must agree.
+ */
+export function botMove(state) {
+  if (state.outcome) return null;
+  return normalMoves(state)[0] || null;
+}
+
+/**
+ * Skipping needs a plain letter for the bot to play, so it is unavailable
+ * precisely when the player has no move that avoids their wildcard. Being out of
+ * ordinary moves is therefore what the wildcard is for, not what a skip is for.
+ */
 export function canSkip(state) {
   if (state.outcome) return false;
   return skipsLeft(state.players[state.turn]) > 0 && botMove(state) !== null;
 }
 
+/** True when every remaining move would have to replay a spent letter. */
+export function needsWildcard(state) {
+  if (state.outcome) return false;
+  const moves = legalMoves(state);
+  return moves.length > 0 && moves.every((move) => move.kind === 'wildcard');
+}
+
 /**
- * Gives up the turn. The bot plays a word, and the letter it used is struck from
- * *both* players' racks — that is what makes a skip cost something.
+ * A playable move, for the hint button. Moves that cost no wildcard come first,
+ * so a hint never quietly pushes the player into spending one. `index` walks
+ * through the alternatives and wraps, so asking again shows something new.
+ */
+export function hint(state, index = 0) {
+  const moves = legalMoves(state);
+  if (moves.length === 0) return null;
+  const ordered = [
+    ...moves.filter((move) => move.kind === 'normal'),
+    ...moves.filter((move) => move.kind === 'wildcard'),
+  ];
+  return ordered[index % ordered.length];
+}
+
+/**
+ * Gives up the turn. The bot plays a letter the giver still held, and that letter
+ * is struck from *both* racks — from the giver always, and from the opponent only
+ * if they still held it too. Nobody's wildcard is touched: a letter the opponent
+ * had already spent simply stays spent.
  */
 export function applySkip(state) {
   if (state.outcome) throw new Error('The game is already over.');
   const player = state.players[state.turn];
   if (skipsLeft(player) <= 0) throw new Error(`${player.name} has no skips left.`);
   const move = botMove(state);
-  if (!move) throw new Error('There is no word left for the bot to play.');
+  if (!move) {
+    throw new Error(
+      `${player.name} has no plain letter left for the bot to play — that needs the wildcard.`,
+    );
+  }
 
   const next = clone(state);
   next.players[next.turn].skipsUsed += 1;
-  // Both players lose the letter, whoever gave up.
+  // Struck off whoever still had it; already-spent stays spent, costing nothing.
   for (const seat of next.players) {
     if (!seat.spent.includes(move.letter)) {
       seat.spent = [...seat.spent, move.letter].sort();
@@ -211,12 +243,13 @@ export function resign(state, playerIdx) {
 }
 
 /**
- * The player on turn loses once they have neither a legal move nor a skip to
- * fall back on.
+ * The player on turn loses the moment they have no legal move at all. A skip
+ * cannot save them: the bot only plays letters they still hold, so if they have
+ * nothing playable there is nothing for it to play either.
  */
 function settleOutcome(state) {
   if (state.outcome) return state;
-  if (legalMoves(state).length === 0 && !canSkip(state)) {
+  if (legalMoves(state).length === 0) {
     state.outcome = { loser: state.turn, winner: 1 - state.turn, reason: 'stuck' };
   }
   return state;

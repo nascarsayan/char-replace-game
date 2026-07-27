@@ -127,6 +127,25 @@ def main() -> int:
             expect(page.get_by_role("status").first).to_contain_text("Riya's turn.")
             check(f"a legal move plays ({word} -> {move['word']}) and passes the turn")
 
+            # The rack you can type on must be first, so it is not below the fold.
+            def first_rack_name(pg):
+                return pg.evaluate(
+                    "document.querySelector('section.rack h3').textContent.replace(/[^A-Za-z ]/g,'').trim()"
+                )
+
+            assert first_rack_name(page).startswith("Riya"), (
+                f"the on-turn player's rack should lead, got {first_rack_name(page)!r}"
+            )
+            assert page.locator("section.rack").first.get_attribute("data-on-turn") == "true"
+            check("the rack belonging to the player on turn is rendered first")
+
+            # The opening word stays in the history for the whole game.
+            seed = page.locator(".seed-word")
+            expect(seed).to_contain_text(word.upper())
+            expect(seed).to_contain_text("opening word")
+            assert page.locator(".move-list li").count() >= 1
+            check(f"the opening word ({word.upper()}) stays listed once moves exist")
+
             # Sayan's rack is now the read-only one; the spent letter must show as spent there.
             spent = page.locator("section.rack", has=page.get_by_role("heading", name="Sayan")).locator(
                 f'.card[aria-label="{move["letter"]}, spent, replayable with the wildcard"]'
@@ -208,10 +227,74 @@ def main() -> int:
                 expect(rack.locator(".rack-count")).to_contain_text("26 of 27")
             check(f"giving up plays {bot['word'].upper()} and costs both players '{bot['letter'].upper()}'")
 
+            spent_before = page.evaluate(
+                """async () => {
+                    const g = JSON.parse(localStorage.getItem('crg.game.v1'));
+                    return g.players.map((p) => ({ spent: p.spent, wild: p.wildcardsUsed }));
+                }"""
+            )
+            assert all(p["wild"] == 0 for p in spent_before), (
+                f"a skip must not spend anybody's wildcard: {spent_before}"
+            )
+            check("the bot's move spends no wildcard on either side")
+
             expect(page.get_by_role("button", name="Give up turn (5 left)")).to_be_visible()
             expect(page.locator(".move-list li").first).to_contain_text("Sayan skipped")
             expect(page.locator(".move-list li").first).to_contain_text("both racks lose")
             check("only the player who gave up spends a skip, and the history records it")
+
+            # --- cornered: only the wildcard can move, and a skip cannot substitute ---
+            page.evaluate(
+                """async () => {
+                    const { createGame } = await import('./src/game.js');
+                    const g = createGame('Sayan', 'Riya', 'cold');
+                    g.players[0].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+                    localStorage.setItem('crg.game.v1', JSON.stringify(g));
+                }"""
+            )
+            page.reload()
+            page.get_by_role("button", name="Resume").click()
+            expect(page.get_by_role("alert").first).to_contain_text("only your ★ wildcard can move")
+            check("a wildcard-only position is announced on the board")
+
+            no_skip = page.get_by_role("button", name="Skip needs a spare letter")
+            expect(no_skip).to_be_visible()
+            expect(no_skip).to_be_disabled()
+            check("a skip cannot stand in for the wildcard, and says why")
+
+            page.get_by_role("button", name="Hint", exact=True).click()
+            answer = page.locator(".hint-answer")
+            expect(answer).to_contain_text("Try slot")
+            expect(answer).to_contain_text("costs your ★ wildcard")
+            first_hint = answer.inner_text()
+            page.get_by_role("button", name="Another hint").click()
+            assert answer.inner_text() != first_hint, "asking again should offer a different move"
+            check("the hint button suggests a playable move and warns it costs the wildcard")
+
+            # --- a hint in an ordinary position prefers a plain letter ---
+            page.evaluate(
+                """async () => {
+                    const { createGame } = await import('./src/game.js');
+                    localStorage.setItem(
+                      'crg.game.v1', JSON.stringify(createGame('Sayan', 'Riya', 'cold')));
+                }"""
+            )
+            page.reload()
+            page.get_by_role("button", name="Resume").click()
+            page.get_by_role("button", name="Hint", exact=True).click()
+            expect(page.locator(".hint-answer")).not_to_contain_text("wildcard")
+            suggested = page.evaluate(
+                """async () => {
+                    const { hint } = await import('./src/game.js');
+                    return hint(JSON.parse(localStorage.getItem('crg.game.v1')));
+                }"""
+            )
+            page.locator("button.tile").nth(suggested["pos"]).click()
+            page.locator(f'button.card[aria-label^="Play {suggested["letter"]},"]').click()
+            expect(page.locator("button.tile span").nth(suggested["pos"])).to_have_text(
+                suggested["letter"].upper()
+            )
+            check("a suggested move is actually playable, and costs no wildcard")
 
             # --- skips run out ---
             page.evaluate(
@@ -268,7 +351,6 @@ def main() -> int:
                 return page.evaluate("JSON.parse(localStorage.getItem('crg.game.v1'))")
 
             plies = 0
-            skips_taken = 0
             for _ in range(400):
                 if page.locator(".outcome").count():
                     break
@@ -280,22 +362,17 @@ def main() -> int:
                         return moves.length ? moves[0] : null;
                     }"""
                 )
+                assert move is not None, (
+                    "an unfinished game must offer a move: running out is the loss"
+                )
                 before = len(state()["history"])
-                if move is None:
-                    # No legal move but the game is alive, so a skip is the only
-                    # action left: give up the turn and let the bot play.
-                    expect(page.get_by_role("alert").first).to_contain_text("No legal move left")
-                    page.get_by_role("button", name="Give up turn").click()
-                    page.locator(".confirm .danger").click()
-                    skips_taken += 1
-                else:
-                    page.locator("button.tile").nth(move["pos"]).click()
-                    page.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
-                    # A spent letter opens the wildcard prompt instead of moving.
-                    if page.locator(".confirm-wildcard").count():
-                        page.get_by_role(
-                            "button", name=f"Spend wildcard on {move['letter'].upper()}"
-                        ).click()
+                page.locator("button.tile").nth(move["pos"]).click()
+                page.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
+                # A spent letter opens the wildcard prompt instead of moving.
+                if page.locator(".confirm-wildcard").count():
+                    page.get_by_role(
+                        "button", name=f"Spend wildcard on {move['letter'].upper()}"
+                    ).click()
                 after = len(state()["history"])
                 assert after == before + 1, f"UI did not advance the game at ply {plies}"
                 plies += 1
@@ -303,10 +380,7 @@ def main() -> int:
             expect(page.locator(".outcome h2")).to_contain_text("wins")
             final = state()
             assert final["outcome"]["reason"] == "stuck", final["outcome"]
-            check(
-                f"a game played to exhaustion over {plies} plies "
-                f"({skips_taken} forced skips) shows a winner"
-            )
+            check(f"a game played to exhaustion over {plies} plies shows a winner")
 
             page.screenshot(path=str(shots / "04-result.png"), full_page=True)
 

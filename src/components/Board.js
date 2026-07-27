@@ -1,5 +1,13 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-standalone.module.js';
-import { LETTERS, WORD_LEN, canSkip, inspectMove, legalMoves, skipsLeft } from '../game.js';
+import {
+  LETTERS,
+  WORD_LEN,
+  canSkip,
+  hint,
+  inspectMove,
+  needsWildcard,
+  skipsLeft,
+} from '../game.js';
 import { seatMarker, seatShape } from '../seats.js';
 import { Definition, InlineDefinition, useDefinitions } from './Definition.js';
 import { Rack } from './Rack.js';
@@ -44,6 +52,7 @@ export function Board({
   const scratchRef = useRef(scratch);
   const [confirmResign, setConfirmResign] = useState(false);
   const [confirmSkip, setConfirmSkip] = useState(false);
+  const [hintIndex, setHintIndex] = useState(null);
 
   function update(patch) {
     scratchRef.current = { ...scratchRef.current, ...patch };
@@ -62,6 +71,7 @@ export function Board({
   useEffect(() => {
     update(EMPTY_SCRATCH);
     setConfirmSkip(false);
+    setHintIndex(null);
   }, [game.history.length, over]);
 
   function attempt(letter) {
@@ -140,7 +150,18 @@ export function Board({
   const skipTarget = game.players[skipSeat];
   const skipsRemaining = skipsLeft(skipTarget);
   const skipAvailable = canSkip(game);
-  const noMovesLeft = !over && !locked && legalMoves(game).length === 0;
+  // Every remaining move would have to replay a spent letter. Worth saying out
+  // loud: the wildcard is the only way on, and a skip cannot help here because
+  // the bot is not allowed to spend it.
+  const wildcardOnly = !locked && needsWildcard(game);
+
+  const shownHint = hintIndex === null ? null : hint(game, hintIndex);
+
+  const skipLabel = !skipAvailable
+    ? skipsRemaining === 0
+      ? 'No skips left'
+      : 'Skip needs a spare letter'
+    : `Give up turn (${skipsRemaining} left)`;
 
   const plies = game.history.length;
   const outcomeLine = over
@@ -195,18 +216,27 @@ export function Board({
 
       <${Definition} word=${game.word} />
 
-      <p class="hint" role="alert" data-kind=${pendingWildcard ? 'wildcard' : 'info'}>
+      <p class="hint" role="alert" data-kind=${pendingWildcard || wildcardOnly ? 'wildcard' : 'info'}>
         ${message ||
         (over
           ? ''
           : locked
             ? `It is ${current.name}'s move.`
-            : noMovesLeft
-              ? 'No legal move left — give up the turn, or lose.'
-            : slot === null
-              ? 'Choose the slot you want to replace.'
-              : `Now pick a letter for slot ${slot + 1}.`)}
+            : wildcardOnly
+              ? 'Every letter that still fits is one you have spent — only your ★ wildcard can move now.'
+              : slot === null
+                ? 'Choose the slot you want to replace.'
+                : `Now pick a letter for slot ${slot + 1}.`)}
       </p>
+
+      ${shownHint
+        ? html`<p class="hint-answer" role="status">
+            ${`Try slot ${shownHint.pos + 1} → ${shownHint.letter.toUpperCase()}, making ${shownHint.word.toUpperCase()}`}
+            ${shownHint.kind === 'wildcard'
+              ? html`<strong> — that one costs your ★ wildcard.</strong>`
+              : null}
+          </p>`
+        : null}
 
       ${pendingWildcard
         ? html`<div class="confirm-wildcard" role="group" aria-label="Confirm wildcard">
@@ -238,19 +268,19 @@ export function Board({
         : null}
 
       <!--
-        Racks stay in seat order rather than moving the player on turn to the
-        front: a rack that jumps sides every move is hard to read, and in a live
-        game "your side" must stay put.
+        The rack you can actually type on comes first, so it is under your thumb
+        rather than below the fold. The racks do swap places as the turn passes;
+        the seat glyph and accent are what keep them tellable apart.
       -->
       <div class="racks">
-        ${game.players.map(
-          (player, seat) => html`
+        ${[game.turn, 1 - game.turn].map(
+          (seat) => html`
             <${Rack}
-              player=${player}
+              player=${game.players[seat]}
               seat=${seat}
               isYou=${youAre === seat}
               onTurn=${!over && game.turn === seat}
-              label=${`${player.name}${game.turn === seat && !over ? ' (on turn)' : ''}`}
+              label=${`${game.players[seat].name}${game.turn === seat && !over ? ' (on turn)' : ''}`}
               interactive=${!over && !locked && game.turn === seat}
               onPlay=${attempt}
             />
@@ -261,9 +291,7 @@ export function Board({
       <section class="history" aria-label="Move history">
         <h3>Moves</h3>
         ${game.history.length === 0
-          ? html`<p class="muted">
-              Opening word: <strong>${game.startWord.toUpperCase()}</strong>
-            </p>`
+          ? null
           : html`<ol class="move-list" reversed>
               ${[...game.history].reverse().map(
                 (move) => html`<li>
@@ -273,11 +301,25 @@ export function Board({
                 </li>`,
               )}
             </ol>`}
+
+        <!-- Oldest entry, so it sits below a newest-first list. -->
+        <p class="seed-word">
+          <strong>${game.startWord.toUpperCase()}</strong>
+          <span class="muted">opening word</span>
+          <${InlineDefinition} word=${game.startWord} />
+        </p>
       </section>
 
       ${over || locked
         ? null
         : html`<div class="board-actions">
+            <button
+              type="button"
+              class="secondary outline"
+              onClick=${() => setHintIndex((n) => (n === null ? 0 : n + 1))}
+            >
+              ${hintIndex === null ? 'Hint' : 'Another hint'}
+            </button>
             ${confirmSkip
               ? html`<span class="confirm" role="group" aria-label="Confirm giving up the turn">
                   <button
@@ -300,9 +342,7 @@ export function Board({
                   disabled=${!skipAvailable}
                   onClick=${() => setConfirmSkip(true)}
                 >
-                  ${skipsRemaining > 0
-                    ? `Give up turn (${skipsRemaining} left)`
-                    : 'No skips left'}
+                  ${skipLabel}
                 </button>`}
             ${confirmResign
               ? html`<span class="confirm" role="group" aria-label="Confirm resignation">

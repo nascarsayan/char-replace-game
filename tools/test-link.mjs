@@ -123,23 +123,23 @@ test('a link describing illegal play is refused', () => {
   const b64 = (value) =>
     Buffer.from(JSON.stringify(value)).toString('base64url');
   // "cold" -> "qold" is not a word.
-  assert.throws(() => decodeGame(b64([2, 'A', 'B', 'cold', '1q', null])), /not legal/i);
+  assert.throws(() => decodeGame(b64([3, 'A', 'B', 'cold', '1q', null])), /not legal/i);
   // Slot 9 does not exist.
-  assert.throws(() => decodeGame(b64([2, 'A', 'B', 'cold', '9b', null])), /slot 9/i);
+  assert.throws(() => decodeGame(b64([3, 'A', 'B', 'cold', '9b', null])), /slot 9/i);
   // An odd number of characters means the move list was cut mid-move.
-  assert.throws(() => decodeGame(b64([2, 'A', 'B', 'cold', '1b3', null])), /truncated/i);
+  assert.throws(() => decodeGame(b64([3, 'A', 'B', 'cold', '1b3', null])), /truncated/i);
   // Not a dictionary word to start from.
-  assert.throws(() => decodeGame(b64([2, 'A', 'B', 'zzzz', '', null])), /not a word/i);
+  assert.throws(() => decodeGame(b64([3, 'A', 'B', 'zzzz', '', null])), /not a word/i);
   // A future version is rejected rather than misread.
   assert.throws(() => decodeGame(b64([99, 'A', 'B', 'cold', '', null])), /different version/i);
   // Missing a name.
-  assert.throws(() => decodeGame(b64([2, '', 'B', 'cold', '', null])), /missing a player name/i);
+  assert.throws(() => decodeGame(b64([3, '', 'B', 'cold', '', null])), /missing a player name/i);
 });
 
 test('replaying the same word twice cannot be smuggled in', () => {
   const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
   // cold -> bold -> cold repeats the opening word.
-  assert.throws(() => decodeGame(b64([2, 'A', 'B', 'cold', '1b1c', null])), /already been played/i);
+  assert.throws(() => decodeGame(b64([3, 'A', 'B', 'cold', '1b1c', null])), /already been played/i);
 });
 
 test('a skip round-trips, and the bot is replayed identically', () => {
@@ -171,7 +171,7 @@ test('a link cannot claim more skips than the rules allow', () => {
   // skipping six times needs 11 tokens. Simpler: hand-build an over-long run.
   const tokens = '0-'.repeat(2 * SKIPS_PER_PLAYER + 2);
   assert.throws(
-    () => decodeGame(b64([2, 'A', 'B', 'cold', tokens, null])),
+    () => decodeGame(b64([3, 'A', 'B', 'cold', tokens, null])),
     /no skips left|no word left|not legal/i,
   );
 });
@@ -199,9 +199,16 @@ test('a game mixing moves and skips plays out and round-trips', () => {
   assert.deepEqual(decodeGame(encodeGame(game)), game);
 });
 
-test('links made by the older format are refused, not misread', () => {
+test('links made by an older format are refused, not misread', () => {
   const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-  assert.throws(() => decodeGame(b64([1, 'A', 'B', 'cold', '1b', null])), /different version/i);
+  // Version 2 encoded skips whose bot letter ignored the giver's rack, so
+  // replaying one now would land on a different board.
+  for (const version of [1, 2]) {
+    assert.throws(
+      () => decodeGame(b64([version, 'A', 'B', 'cold', '0-', null])),
+      /different version/i,
+    );
+  }
 });
 
 test('buildShareUrl and readGameFromLocation agree', () => {

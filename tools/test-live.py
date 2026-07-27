@@ -121,12 +121,8 @@ def main() -> int:
     }"""
 
     def legal_move(pg, played: list[str]):
-        move = pg.evaluate(LEGAL_MOVE_JS, played)
-        assert move is not None, (
-            f"no legal move left from {board_word(pg)} (played: {played}) — "
-            "the random opening word dead-ended; rerun"
-        )
-        return move
+        """A playable move, or None when the position has genuinely dead-ended."""
+        return pg.evaluate(LEGAL_MOVE_JS, played)
 
     def play(pg, move):
         pg.locator("button.tile").nth(move["pos"]).click()
@@ -214,6 +210,13 @@ def main() -> int:
             word_before = board_word(host)
             played = [word_before]
             move = legal_move(host, played)
+            if move is None:
+                print(
+                    f"\nSKIPPED: the random opening word {word_before.upper()} has no "
+                    "continuation for this seat; rerun.",
+                    file=sys.stderr,
+                )
+                return 1
             play(host, move)
             played.append(move["word"])
             expect(guest.get_by_role("status").first).to_contain_text("Your turn.", timeout=30000)
@@ -246,6 +249,7 @@ def main() -> int:
 
             # --- and back the other way ---
             reply = legal_move(guest, played)
+            assert reply is not None, f"guest has no reply from {board_word(guest)}"
             play(guest, reply)
             played.append(reply["word"])
             expect(host.get_by_role("status").first).to_contain_text("Your turn.", timeout=30000)

@@ -12,7 +12,10 @@ import {
   createGame,
   hasWildcard,
   inspectMove,
+  hint,
   legalMoves,
+  needsWildcard,
+  normalMoves,
   randomStartWord,
   resign,
   skipsLeft,
@@ -130,24 +133,103 @@ test('a player with an empty deck has no moves', () => {
   assert.equal(legalMoves(g).length, 0);
 });
 
-test('a stranded opponent survives while they still hold a skip', () => {
+test('a stranded opponent must use their wildcard, and cannot skip instead', () => {
   const g = createGame('A', 'B', 'cold');
-  g.players[1].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
-  g.players[1].wildcardsUsed = 1;
+  g.players[1].spent = 'abcdefghijklmnopqrstuvwxyz'.split(''); // wildcard still held
   const after = applyMove(g, 0, 'b'); // A: cold -> bold
-  assert.equal(after.outcome, null, 'a skip is still a way out');
-  assert.equal(legalMoves(after).length, 0);
-  assert.equal(canSkip(after), true);
+  assert.equal(after.outcome, null, 'the wildcard is still a way out');
+  assert.equal(normalMoves(after).length, 0);
+  assert.ok(legalMoves(after).length > 0);
+  assert.equal(needsWildcard(after), true);
+  // A skip would need the bot to play a letter B still holds, and there is none.
+  assert.equal(canSkip(after), false);
+  assert.throws(() => applySkip(after), /no plain letter/);
 });
 
-test('the move that strands a skip-less opponent ends the game on their turn', () => {
+test('the move that strands an opponent with no wildcard ends the game', () => {
   const g = createGame('A', 'B', 'cold');
   g.players[1].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
   g.players[1].wildcardsUsed = 1;
-  g.players[1].skipsUsed = SKIPS_PER_PLAYER;
   const after = applyMove(g, 0, 'b'); // A: cold -> bold
   assert.deepEqual(after.outcome, { loser: 1, winner: 0, reason: 'stuck' });
   assert.equal(after.turn, 1, 'the stuck player is the one on turn');
+  assert.equal(needsWildcard(after), false, 'a finished game needs nothing');
+});
+
+test('the bot only plays a letter the giver still holds', () => {
+  const g = createGame('A', 'B', 'cold');
+  assert.deepEqual(botMove(g), { pos: 0, letter: 'b', word: 'bold', kind: 'normal' });
+
+  // Spend 'b': the bot must move on rather than replay it with a wildcard.
+  g.players[0].spent = ['b'];
+  const move = botMove(g);
+  assert.notEqual(move.letter, 'b');
+  assert.equal(move.kind, 'normal');
+  assert.ok(!g.players[0].spent.includes(move.letter));
+});
+
+test("a skip never spends anybody's wildcard", () => {
+  const g = createGame('A', 'B', 'cold');
+  // B has already spent every letter the bot might choose, but holds a wildcard.
+  g.players[1].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+  const after = applySkip(g);
+  assert.equal(after.players[0].wildcardsUsed, 0);
+  assert.equal(after.players[1].wildcardsUsed, 0, 'the opponent keeps their wildcard');
+  // The giver always loses the letter; the opponent had already spent it.
+  const letter = after.history[0].letter;
+  assert.ok(after.players[0].spent.includes(letter));
+  assert.equal(after.players[1].spent.length, 26, 'nothing new was taken from them');
+});
+
+test('a skip strikes the letter off the opponent only when they still held it', () => {
+  const g = createGame('A', 'B', 'cold');
+  const letter = botMove(g).letter;
+  const both = applySkip(g);
+  assert.ok(both.players[0].spent.includes(letter));
+  assert.ok(both.players[1].spent.includes(letter), 'playable for them too, so struck off');
+
+  const already = createGame('A', 'B', 'cold');
+  already.players[1].spent = [letter];
+  const after = applySkip(already);
+  assert.deepEqual(after.players[1].spent, [letter], 'no double-count');
+  assert.equal(after.players[1].wildcardsUsed, 0);
+});
+
+test('needsWildcard is only true when nothing ordinary is left', () => {
+  const fresh = createGame('A', 'B', 'cold');
+  assert.equal(needsWildcard(fresh), false);
+
+  const cornered = createGame('A', 'B', 'cold');
+  cornered.players[0].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+  assert.equal(needsWildcard(cornered), true);
+
+  const done = createGame('A', 'B', 'cold');
+  done.players[0].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+  done.players[0].wildcardsUsed = 1;
+  assert.equal(legalMoves(done).length, 0);
+  assert.equal(needsWildcard(done), false, 'no moves at all is a loss, not a wildcard case');
+});
+
+test('hints are playable, prefer plain letters, and cycle', () => {
+  const g = createGame('A', 'B', 'cold');
+  const first = hint(g);
+  assert.equal(first.kind, 'normal');
+  assert.equal(inspectMove(g, first.pos, first.letter).ok, true);
+
+  const seen = new Set();
+  for (let i = 0; i < 4; i++) seen.add(`${hint(g, i).pos}${hint(g, i).letter}`);
+  assert.equal(seen.size, 4, 'asking again should offer something new');
+  assert.deepEqual(hint(g, 0), hint(g, legalMoves(g).length), 'the walk wraps');
+
+  // With only wildcard moves left, the hint says so rather than giving up.
+  const cornered = createGame('A', 'B', 'cold');
+  cornered.players[0].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+  assert.equal(hint(cornered).kind, 'wildcard');
+
+  const done = createGame('A', 'B', 'cold');
+  done.players[0].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+  done.players[0].wildcardsUsed = 1;
+  assert.equal(hint(done), null);
 });
 
 test('a fresh game gives both players their skips', () => {
@@ -160,7 +242,7 @@ test('a fresh game gives both players their skips', () => {
 
 test('the bot move is deterministic and never repeats a played word', () => {
   const g = createGame('A', 'B', 'cold');
-  assert.deepEqual(botMove(g), { pos: 0, letter: 'b', word: 'bold' });
+  assert.deepEqual(botMove(g), { pos: 0, letter: 'b', word: 'bold', kind: 'normal' });
   assert.deepEqual(botMove(g), botMove(g), 'must not vary between calls');
 
   const seen = createGame('A', 'B', 'cold');
@@ -189,12 +271,15 @@ test('giving up the turn costs both players the letter', () => {
   assert.equal(skipsLeft(after.players[0]), SKIPS_PER_PLAYER - 1);
 });
 
-test('a letter already spent is not double-counted by a skip', () => {
+test('the giver always spends a fresh card, never one already gone', () => {
   const g = createGame('A', 'B', 'cold');
   g.players[0].spent = ['b'];
-  const after = applySkip(g); // the bot plays 'b' again
-  assert.deepEqual(after.players[0].spent, ['b'], 'no duplicate card');
-  assert.deepEqual(after.players[1].spent, ['b']);
+  const move = botMove(g);
+  assert.notEqual(move.letter, 'b', 'the bot must not pick a letter the giver spent');
+
+  const after = applySkip(g);
+  assert.deepEqual(after.players[0].spent, ['b', move.letter].sort());
+  assert.equal(after.players[0].wildcardsUsed, 0, 'and never through the wildcard');
 });
 
 test('applySkip does not mutate the state it was given', () => {
@@ -226,7 +311,7 @@ test('a skip is impossible when the bot has nowhere to go', () => {
   g.usedWords = ['cold', ...neighbours];
   assert.equal(botMove(g), null);
   assert.equal(canSkip(g), false);
-  assert.throws(() => applySkip(g), /no word left/);
+  assert.throws(() => applySkip(g), /no plain letter/);
 });
 
 test('resigning hands the win to the other player', () => {
@@ -244,9 +329,9 @@ test('a full random game terminates with exactly one loser', () => {
     let turns = 0;
     while (!g.outcome) {
       const moves = legalMoves(g);
-      if (moves.length === 0) {
-        // Out of moves but not out of skips: the only legal action is to give up.
-        assert.equal(canSkip(g), true);
+      // A live game always has a move: running out of them *is* the loss.
+      assert.ok(moves.length > 0, 'an unfinished game must offer a move');
+      if (turns % 9 === 0 && canSkip(g)) {
         g = applySkip(g);
       } else {
         const pick = moves[Math.floor(rand() * moves.length)];
@@ -273,6 +358,10 @@ test('a full random game terminates with exactly one loser', () => {
         assert.ok(
           g.players.every((p) => p.spent.includes(m.letter)),
           'a skipped letter must be gone from both racks',
+        );
+        assert.ok(
+          g.history.filter((h) => h.kind === 'wildcard').every((h) => h.by !== undefined),
+          'sanity: wildcard moves are only ever made by players',
         );
       }
     }
