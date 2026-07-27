@@ -17,8 +17,10 @@ const RULES = [
   'No word may appear twice in the same game.',
   `The letter you place is a card, and it is spent. You hold ${LETTERS.length} letter cards plus ${WILDCARDS_PER_PLAYER} wildcard — ${CARDS_PER_PLAYER} in total.`,
   'The wildcard lets you replay one letter you have already spent. The result still has to be a real word. You get one, ever.',
-  `Stuck? Give up the turn. A bot plays the next available word for you, and the letter it uses is struck off BOTH racks. You get ${SKIPS_PER_PLAYER} of these.`,
-  'You lose when you have no legal move and no skips left.',
+  `Do not know a word? Give up the turn. A bot plays one for you, using a letter you still hold — never your wildcard — and that letter is struck off BOTH racks. You get ${SKIPS_PER_PLAYER} of these.`,
+  'So a skip needs a spare letter of your own. Once every letter that fits is one you have spent, the wildcard is the only way on, and the board says so.',
+  'Stuck for ideas either way? The hint button shows a playable move, and warns you if it would cost your wildcard.',
+  'You lose when you have no legal move at all.',
 ];
 
 export function Rules({ open = false }) {

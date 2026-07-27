@@ -21,10 +21,10 @@ not online at the same time.
    **27 cards** in total.
 5. The wildcard lets you replay one letter you have already spent. The result
    still has to be a real word. You get one, ever.
-6. **Stuck?** Give up the turn. A bot plays the next available word for you — and
-   the letter it uses is struck off **both** racks, which is what makes it cost
-   something. You get 5 of these per game.
-7. You lose when you have neither a legal move nor a skip left.
+6. **Do not know a word?** Give up the turn. A bot plays one for you, using a
+   letter you still hold — and that letter is struck off **both** racks, which is
+   what makes it cost something. You get 5 of these per game.
+7. You lose when you have no legal move at all.
 
 Both racks are visible at all times: knowing which letters your opponent has
 burned, and whether they still hold their wildcard, is the game.
@@ -36,14 +36,27 @@ Keyboard: `1`–`4` or `←`/`→` pick a slot, a letter key plays it, `Esc` cle
 
 ### Giving up a turn
 
-A skip is a lifeline, not a free pass:
+A skip is for not knowing a word, not for being out of cards:
 
-- The bot plays the first unplayed word reachable from the current one. It ignores
-  rack limits, so a skip works even when your own cards have run dry.
-  Deliberately deterministic — share links and live peers replay skips rather
-  than transmitting what the bot chose, so both sides must compute it identically.
-- Only the player who gave up spends a skip, but **both** players lose the letter.
-- 5 skips each. Run out of both moves and skips and you lose.
+- The bot plays a letter **you still hold** — never a wildcard, yours or anyone's.
+  It takes the first such word in slot-then-letter order, and is deliberately
+  deterministic: share links and live peers replay a skip rather than transmitting
+  what the bot chose, so both sides must compute the same word.
+- The letter is struck off **both** racks — always yours, and your opponent's too
+  if they still held it. If they had already spent it, it simply stays spent; no
+  wildcard is ever touched to make room.
+- Only the player who gave up spends a skip. 5 each.
+- Because the bot needs a spare letter of yours, **a skip cannot rescue you when
+  you have none**. That case is what the wildcard is for.
+
+### When only the wildcard can move
+
+Once every letter that still fits is one you have spent, the board says so plainly
+and the skip button explains why it is unavailable. Your ★ wildcard is the way on
+— it replays one spent letter, and the cards that qualify are the dashed ones.
+
+Stuck for ideas in any position, **Hint** shows a playable move and tells you if it
+would cost your wildcard. Asking again offers a different one.
 
 ## Playing live
 

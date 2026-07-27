@@ -550,6 +550,17 @@ li.card {
   font-weight: 400;
 }
 
+/* ---------- hints ---------- */
+
+.hint-answer {
+  margin: 0 auto 0.75rem;
+  padding: 0.6rem 1rem;
+  max-width: 34rem;
+  text-align: center;
+  border: 2px dashed var(--pico-primary);
+  border-radius: var(--crg-radius);
+}
+
 /* ---------- definitions ---------- */
 
 .definition {
@@ -593,6 +604,16 @@ li.card {
 }
 
 .move-list .muted {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.seed-word {
+  margin: 0.35rem 0 0;
+  padding-left: 2.75rem;
+}
+
+.seed-word .muted {
   display: block;
   font-size: 0.85rem;
 }
