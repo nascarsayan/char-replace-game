@@ -1,14 +1,21 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-standalone.module.js';
-import { LETTERS, WORD_LEN, inspectMove } from '../game.js';
+import { LETTERS, WORD_LEN, canSkip, inspectMove, legalMoves, skipsLeft } from '../game.js';
 import { seatMarker, seatShape } from '../seats.js';
+import { Definition, InlineDefinition, useDefinitions } from './Definition.js';
 import { Rack } from './Rack.js';
 import { Share } from './Share.js';
 
 const EMPTY_SCRATCH = { slot: null, pendingWildcard: null, message: '' };
 
 function describeMove(game, move) {
-  const wildcard = move.kind === 'wildcard' ? ' ★ wildcard' : '';
-  return `${game.players[move.by].name} · slot ${move.pos + 1} → ${move.letter.toUpperCase()}${wildcard}`;
+  const who = game.players[move.by].name;
+  const letter = move.letter.toUpperCase();
+  const played = `slot ${move.pos + 1} → ${letter}`;
+  if (move.kind === 'skip') {
+    // Worth spelling out: the bot chose this, and it cost both players a card.
+    return `${who} skipped · bot played ${played} · both racks lose ${letter}`;
+  }
+  return `${who} · ${played}${move.kind === 'wildcard' ? ' ★ wildcard' : ''}`;
 }
 
 /**
@@ -24,16 +31,19 @@ export function Board({
   locked = false,
   status,
   onMove,
+  onSkip,
   onResign,
   onRematch,
   onExit,
 }) {
+  useDefinitions();
   // Per-turn scratch state lives in a ref with a state mirror for rendering.
   // Keyboard entry is faster than a render pass — typing "1" then "b" would
   // otherwise read a stale `slot` from the closure and drop the letter.
   const [scratch, setScratch] = useState(EMPTY_SCRATCH);
   const scratchRef = useRef(scratch);
   const [confirmResign, setConfirmResign] = useState(false);
+  const [confirmSkip, setConfirmSkip] = useState(false);
 
   function update(patch) {
     scratchRef.current = { ...scratchRef.current, ...patch };
@@ -51,6 +61,7 @@ export function Board({
   // Every completed move clears the scratch state.
   useEffect(() => {
     update(EMPTY_SCRATCH);
+    setConfirmSkip(false);
   }, [game.history.length, over]);
 
   function attempt(letter) {
@@ -124,6 +135,13 @@ export function Board({
         ? 'Your turn.'
         : `Waiting for ${current.name}…`;
 
+  // Skips always belong to the player on turn — it is their turn being given up.
+  const skipSeat = game.turn;
+  const skipTarget = game.players[skipSeat];
+  const skipsRemaining = skipsLeft(skipTarget);
+  const skipAvailable = canSkip(game);
+  const noMovesLeft = !over && !locked && legalMoves(game).length === 0;
+
   const plies = game.history.length;
   const outcomeLine = over
     ? [
@@ -175,12 +193,16 @@ export function Board({
         )}
       </div>
 
+      <${Definition} word=${game.word} />
+
       <p class="hint" role="alert" data-kind=${pendingWildcard ? 'wildcard' : 'info'}>
         ${message ||
         (over
           ? ''
           : locked
             ? `It is ${current.name}'s move.`
+            : noMovesLeft
+              ? 'No legal move left — give up the turn, or lose.'
             : slot === null
               ? 'Choose the slot you want to replace.'
               : `Now pick a letter for slot ${slot + 1}.`)}
@@ -247,14 +269,41 @@ export function Board({
                 (move) => html`<li>
                   <strong>${move.to.toUpperCase()}</strong>
                   <span class="muted">${describeMove(game, move)}</span>
+                  <${InlineDefinition} word=${move.to} />
                 </li>`,
               )}
             </ol>`}
       </section>
 
-      ${over
+      ${over || locked
         ? null
         : html`<div class="board-actions">
+            ${confirmSkip
+              ? html`<span class="confirm" role="group" aria-label="Confirm giving up the turn">
+                  <button
+                    type="button"
+                    class="danger"
+                    onClick=${() => {
+                      setConfirmSkip(false);
+                      onSkip();
+                    }}
+                  >
+                    ${`Give up the turn — costs ${skipTarget.name} and ${game.players[1 - skipSeat].name} the letter`}
+                  </button>
+                  <button type="button" class="secondary" onClick=${() => setConfirmSkip(false)}>
+                    Keep thinking
+                  </button>
+                </span>`
+              : html`<button
+                  type="button"
+                  class="secondary"
+                  disabled=${!skipAvailable}
+                  onClick=${() => setConfirmSkip(true)}
+                >
+                  ${skipsRemaining > 0
+                    ? `Give up turn (${skipsRemaining} left)`
+                    : 'No skips left'}
+                </button>`}
             ${confirmResign
               ? html`<span class="confirm" role="group" aria-label="Confirm resignation">
                   <button

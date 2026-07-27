@@ -44,7 +44,17 @@ def main() -> int:
     shots.mkdir(parents=True, exist_ok=True)
     base, httpd = serve(ROOT)
     problems: list[str] = []
+    tracker_noise: list[str] = []
     checks = 0
+
+    # Trystero deliberately announces to several trackers at once for redundancy,
+    # so one being down is normal and says nothing about this code. Only that
+    # specific failure is tolerated; every other console error still fails.
+    def record(message: str) -> None:
+        if 'establish a connection to the server at wss://tracker' in message:
+            tracker_noise.append(message)
+        else:
+            problems.append(message)
 
     def check(label: str) -> None:
         nonlocal checks
@@ -113,11 +123,9 @@ def main() -> int:
             for pg in (host, guest):
                 pg.on(
                     "console",
-                    lambda m: problems.append(f"console.{m.type}: {m.text}")
-                    if m.type == "error"
-                    else None,
+                    lambda m: record(f"console.{m.type}: {m.text}") if m.type == "error" else None,
                 )
-                pg.on("pageerror", lambda e: problems.append(f"pageerror: {e}"))
+                pg.on("pageerror", lambda e: record(f"pageerror: {e}"))
 
             # --- host opens a room ---
             sign_in(host, "Alice")
@@ -236,13 +244,20 @@ def main() -> int:
     finally:
         httpd.shutdown()
 
+    if tracker_noise:
+        unreachable = sorted({
+            message.split('wss://')[1].split('/')[0] for message in tracker_noise
+        })
+        print(f"\n  ..  {', '.join(unreachable)} unreachable — tolerated, the "
+              f"others carried the signalling")
+
     if problems:
         print("\nBrowser reported problems:", file=sys.stderr)
         for problem in problems:
             print(f"  {problem}", file=sys.stderr)
         return 1
 
-    print(f"\n{checks} live checks passed, no console errors. Screenshots in {shots}")
+    print(f"\n{checks} live checks passed, no unexpected console errors. Screenshots in {shots}")
     return 0
 
 
