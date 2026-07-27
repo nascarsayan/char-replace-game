@@ -1,0 +1,475 @@
+/*
+ * Layered on top of Pico's classless defaults. Goals, in order:
+ * 1. Every control is a large, obvious target (>= 44px, most much bigger).
+ * 2. State is never carried by colour alone — shape, weight or a glyph too.
+ * 3. Restrained palette: Pico's own variables, no extra hues.
+ */
+
+:root {
+  --crg-gap: 0.75rem;
+  --crg-tile-size: clamp(3.75rem, 17vw, 5.5rem);
+  --crg-card-size: clamp(2.75rem, 10vw, 3.5rem);
+  --crg-radius: 0.5rem;
+}
+
+/*
+ * Pico redefines --pico-color to the button foreground (#fff in light theme)
+ * inside every button, so `color: var(--pico-color)` on a light-backgrounded
+ * button paints white on white. --pico-contrast is not overridden and flips with
+ * the theme, so it is what we use for card and tile ink.
+ */
+.tile,
+.card {
+  --crg-ink: var(--pico-contrast);
+}
+
+/*
+ * Pico gives direct children of [role='group'] `flex: 1` to build joined button
+ * groups. Our groups are plain labelled layouts, not Pico button groups, so opt
+ * out — otherwise the word tiles stretch to fill the row.
+ */
+[role='group'] > * {
+  flex: 0 0 auto;
+  margin-inline: 0;
+}
+
+body {
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 62rem;
+}
+
+/* ---------- shell ---------- */
+
+.site-head {
+  text-align: center;
+  margin-block: 1.5rem 1rem;
+}
+
+.site-head h1 {
+  margin-bottom: 0.25rem;
+  letter-spacing: 0.02em;
+}
+
+.tagline,
+.muted {
+  color: var(--pico-muted-color);
+}
+
+.tagline {
+  margin-bottom: 0;
+}
+
+.site-foot {
+  margin-block: 2.5rem 1.5rem;
+  text-align: center;
+  color: var(--pico-muted-color);
+}
+
+button.link {
+  display: inline;
+  width: auto;
+  padding: 0;
+  margin: 0 0 0 0.35rem;
+  border: 0;
+  background: none;
+  color: var(--pico-primary);
+  text-decoration: underline;
+  font-size: inherit;
+}
+
+/* ---------- generic controls ---------- */
+
+button.big {
+  min-height: 3.5rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+button.danger {
+  --pico-background-color: var(--pico-del-color);
+  --pico-border-color: var(--pico-del-color);
+  --pico-color: var(--pico-primary-inverse);
+}
+
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.confirm button {
+  width: auto;
+  margin: 0;
+  min-height: 2.75rem;
+}
+
+:where(button, input, [role='group'] > *):focus-visible {
+  outline: 3px solid var(--pico-primary);
+  outline-offset: 2px;
+}
+
+.panel > form {
+  margin-bottom: 1.5rem;
+}
+
+.error {
+  min-height: 1.5rem;
+  margin: 0 0 0.5rem;
+  color: var(--pico-del-color);
+  font-weight: 600;
+}
+
+.error:empty {
+  min-height: 0.5rem;
+}
+
+/* ---------- users ---------- */
+
+.signed-in {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--crg-gap);
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--crg-radius);
+}
+
+.signed-in button {
+  width: auto;
+  margin: 0;
+  min-height: 2.75rem;
+}
+
+.user-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--crg-gap);
+}
+
+.user-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.user-row > button,
+.user-row > .confirm {
+  margin: 0;
+}
+
+button.user-pick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  text-align: left;
+}
+
+.user-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.user-meta {
+  font-size: 0.85rem;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.user-row > button:not(.user-pick) {
+  width: auto;
+  min-width: 6rem;
+}
+
+.resume {
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--crg-radius);
+  background: var(--pico-card-sectioning-background-color);
+}
+
+.resume button,
+.outcome button {
+  width: auto;
+  margin: 0.25rem 0.5rem 0 0;
+}
+
+/* ---------- board ---------- */
+
+.turn {
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.word {
+  display: flex;
+  justify-content: center;
+  gap: var(--crg-gap);
+  margin-bottom: 0.75rem;
+}
+
+button.tile {
+  width: var(--crg-tile-size);
+  height: calc(var(--crg-tile-size) * 1.15);
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.1rem;
+  border-radius: var(--crg-radius);
+  font-size: calc(var(--crg-tile-size) * 0.5);
+  font-weight: 700;
+  line-height: 1;
+  background: var(--pico-card-background-color);
+  color: var(--crg-ink);
+  border: 2px solid var(--pico-muted-border-color);
+}
+
+button.tile small {
+  font-size: 0.75rem;
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+button.tile[aria-checked='true'] {
+  border-width: 4px;
+  border-color: var(--pico-primary);
+  box-shadow: inset 0 0 0 2px var(--pico-primary);
+}
+
+.hint {
+  min-height: 3rem;
+  margin-bottom: 0.5rem;
+  text-align: center;
+  color: var(--pico-muted-color);
+}
+
+.hint[data-kind='wildcard'] {
+  color: var(--crg-ink);
+  font-weight: 600;
+}
+
+.confirm-wildcard {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--crg-gap);
+  margin-bottom: 1rem;
+}
+
+.confirm-wildcard button {
+  width: auto;
+  margin: 0;
+}
+
+.outcome {
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+  text-align: center;
+  border: 2px solid var(--pico-primary);
+  border-radius: var(--crg-radius);
+}
+
+.outcome h2 {
+  margin-bottom: 0.25rem;
+}
+
+.board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--crg-gap);
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+
+.board-actions > button {
+  width: auto;
+  margin: 0;
+  min-height: 2.75rem;
+}
+
+/* ---------- racks ---------- */
+
+.racks {
+  display: grid;
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+@media (min-width: 48rem) {
+  .racks {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.rack {
+  padding: 1rem;
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--crg-radius);
+}
+
+.rack-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.rack-head h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.rack-count {
+  margin: 0;
+  color: var(--pico-muted-color);
+  font-size: 0.9rem;
+}
+
+.cards {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--crg-card-size), 1fr));
+  gap: 0.4rem;
+}
+
+/*
+ * Pico sets `list-style: square` on the li itself, and a direct declaration
+ * beats list-style inherited from the ul — so it has to be reset here, not on
+ * .cards. Only bites the interactive rack, where the li wraps a button and so
+ * stays display: list-item.
+ */
+.cards > li,
+.user-list > li {
+  margin: 0;
+  list-style: none;
+}
+
+.card {
+  width: 100%;
+  min-height: var(--crg-card-size);
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--crg-radius);
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1;
+  border: 2px solid var(--pico-muted-border-color);
+  background: var(--pico-card-background-color);
+  color: var(--crg-ink);
+}
+
+/* Spent-but-wildcard-replayable: dashed edge plus a corner star, not just a tint. */
+.card[data-state='wildcard-only'] {
+  border-style: dashed;
+  border-color: var(--pico-primary);
+  position: relative;
+}
+
+.card[data-state='wildcard-only']::after {
+  content: '★';
+  position: absolute;
+  top: 0.05rem;
+  right: 0.2rem;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.card[data-state='spent'] {
+  color: var(--pico-muted-color);
+  border-color: var(--pico-muted-border-color);
+  background: var(--pico-card-sectioning-background-color);
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+
+/* Read-only opponent rack: <li class="card"> instead of a button. */
+li.card {
+  cursor: default;
+}
+
+.wildcard-state {
+  margin: 0.75rem 0 0;
+  font-weight: 600;
+}
+
+.wildcard-state[data-left='false'] {
+  color: var(--pico-muted-color);
+  font-weight: 400;
+}
+
+/* ---------- history & rules ---------- */
+
+.history {
+  margin-top: 1.75rem;
+}
+
+.history h3 {
+  font-size: 1.1rem;
+}
+
+.move-list {
+  margin: 0;
+  /* Wide enough that two-digit move numbers are not clipped. */
+  padding-left: 2.75rem;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+
+.move-list li {
+  margin-bottom: 0.35rem;
+}
+
+.move-list .muted {
+  display: block;
+  font-size: 0.85rem;
+}
+
+.rules {
+  margin-top: 2rem;
+}
+
+.rules summary {
+  font-size: 1.1rem;
+  font-weight: 600;
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+}
+
+.rules ol {
+  padding-left: 1.5rem;
+}
+
+.rules li {
+  margin-bottom: 0.5rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

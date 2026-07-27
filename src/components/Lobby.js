@@ -1,0 +1,97 @@
+import { html, useState } from '../../vendor/preact-standalone.module.js';
+import { addUser, deleteUser, findUser, listUsers, normaliseName } from '../store.js';
+import { Rules } from './Rules.js';
+import { UserPicker } from './UserPicker.js';
+
+// Built as a string because htm drops the whitespace between adjacent ${}
+// expressions, which would run the words together.
+function describeSavedGame(game) {
+  const plies = game.history.length;
+  const progress = plies === 1 ? '1 move in' : `${plies} moves in`;
+  return `${game.players[0].name} vs ${game.players[1].name} — on ${game.word.toUpperCase()}, ${progress}.`;
+}
+
+/** Opponent selection. Both players share this screen and keyboard — hotseat. */
+export function Lobby({ me, savedGame, onStart, onResume, onDiscard, onSignOut }) {
+  const [users, setUsers] = useState(listUsers);
+  const [opponent, setOpponent] = useState('');
+  const [error, setError] = useState('');
+
+  function start(name) {
+    const clean = normaliseName(name);
+    if (!clean) return setError('Name the opponent first.');
+    if (clean.toLowerCase() === me.toLowerCase()) return setError('Pick someone other than you.');
+    if (!findUser(clean)) {
+      try {
+        addUser(clean);
+        setUsers(listUsers());
+      } catch (err) {
+        return setError(err.message);
+      }
+    }
+    onStart(me, findUser(clean).name);
+  }
+
+  function remove(userName) {
+    deleteUser(userName);
+    setUsers(listUsers());
+  }
+
+  return html`
+    <div class="panel">
+      <p class="signed-in">
+        <!-- One span: space-between would otherwise set the name adrift from its label. -->
+        <span>Playing as <strong>${me}</strong></span>
+        <button type="button" class="secondary outline" onClick=${onSignOut}>Switch player</button>
+      </p>
+
+      ${savedGame
+        ? html`<div class="resume">
+            <h3>Unfinished game</h3>
+            <p>${describeSavedGame(savedGame)}</p>
+            <button type="button" class="big" onClick=${onResume}>Resume</button>
+            <button type="button" class="secondary" onClick=${onDiscard}>Discard</button>
+          </div>`
+        : null}
+
+      <h2>Start a game</h2>
+      <form
+        onSubmit=${(e) => {
+          e.preventDefault();
+          start(opponent);
+        }}
+      >
+        <label>
+          Opponent
+          <input
+            type="text"
+            name="opponent"
+            maxlength="24"
+            autocomplete="off"
+            placeholder="new or existing name"
+            value=${opponent}
+            onInput=${(e) => {
+              setOpponent(e.target.value);
+              setError('');
+            }}
+            aria-invalid=${error ? 'true' : undefined}
+            aria-describedby="lobby-error"
+          />
+        </label>
+        <p id="lobby-error" class="error" role="alert">${error}</p>
+        <button type="submit" class="big">Play</button>
+      </form>
+
+      <h3>Or pick a saved player</h3>
+      <${UserPicker}
+        users=${users}
+        pickLabel="Play against"
+        onPick=${start}
+        onDelete=${remove}
+        skipName=${me}
+      />
+
+      <${Rules} />
+    </div>
+  `;
+}

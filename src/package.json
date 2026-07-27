@@ -1,0 +1,5 @@
+{
+  "//": "Not an npm package. This only tells Node that src/*.js are ES modules, so tools/test-game.mjs can import them. Browsers ignore this file.",
+  "type": "module",
+  "private": true
+}
