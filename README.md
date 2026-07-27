@@ -7,8 +7,9 @@ you lose.
 
 **Play: https://nascarsayan.github.io/char-replace-game/** — password `chargame`.
 
-Play side by side on one device, or play remotely by passing a link back and
-forth — see [Playing remotely](#playing-remotely).
+Three ways to play: [live](#playing-live) over a direct browser-to-browser
+connection, side by side on one device, or [by link](#playing-by-link) if you are
+not online at the same time.
 
 ## Rules
 
@@ -27,10 +28,30 @@ burned, and whether they still hold their wildcard, is the game.
 
 Keyboard: `1`–`4` or `←`/`→` pick a slot, a letter key plays it, `Esc` clears.
 
-## Playing remotely
+## Playing live
 
-There is no server, so the link *is* the transport — correspondence chess, not a
-live lobby. You do not both need to be online at once.
+Pick **Play live**, then **Host a new game**. You get a six-character room code
+and an invite link; send either to your opponent, who joins with it. Moves then
+appear on both boards as they are made.
+
+The two browsers talk directly over WebRTC. Public WebTorrent trackers are used
+only to introduce the peers — no game data passes through them, and there is no
+server of ours anywhere in the loop.
+
+Each browser holds a **fixed side**: the host plays first, the joiner second. The
+board says which one you are, marks your rack, and refuses input when it is not
+your move.
+
+Being honest about the limits: this needs you both online at the same time, and
+it leans on free public signalling that is occasionally down or rate-limited.
+Very restrictive networks (some corporate NATs) can block the direct connection
+outright, because there is no TURN relay to fall back on. When live will not
+connect, the link method below always works.
+
+## Playing by link
+
+No connection needed at all — the link *is* the transport, correspondence-chess
+style. You do not both need to be online at once.
 
 1. Start a game and take your turn.
 2. The board shows **"<opponent> is up — send them this link"**. Copy it and send
@@ -78,8 +99,10 @@ modules, which browsers only load over http(s).
 | `src/words.js` | Generated dictionary: the 5,454 four-letter SOWPODS words. |
 | `src/store.js` | localStorage: users, session, saved local game. |
 | `src/link.js` | Encodes a game into a shareable URL fragment, and validates one on the way back in. |
+| `src/net.js` | Live games: joins a room over WebRTC and validates every position that arrives. |
+| `src/seats.js` | The per-seat glyphs that say which side is which. |
 | `src/components/` | Preact components, written with `htm` tagged templates (no JSX, no transpiler). |
-| `vendor/` | Pinned copies of Pico CSS and preact+htm, so the page needs no CDN at runtime. |
+| `vendor/` | Pinned copies of Pico CSS, preact+htm and Trystero, so the page needs no CDN at runtime. |
 | `tools/` | Dictionary generator and the three test suites. |
 
 State lives in one plain object that round-trips through `JSON.stringify`, which
@@ -110,6 +133,13 @@ storage and only the link:
 ```sh
 pip install playwright && python -m playwright install firefox
 python3 tools/test-ui.py          # add --headed to watch it
+```
+
+Live play needs real internet, so it is a separate script. Two browser profiles
+host and join a room and trade moves for real:
+
+```sh
+python3 tools/test-live.py
 ```
 
 ## Regenerating the dictionary

@@ -301,6 +301,97 @@ button.tile[aria-checked='true'] {
   min-height: 2.75rem;
 }
 
+/* ---------- seats ---------- */
+
+/*
+ * Two restrained accents, one per seat. Colour is never the only cue: each seat
+ * also has its own glyph (● / ◆) and "you" is spelled out, so the sides stay
+ * distinguishable in monochrome or without colour vision.
+ */
+[data-seat='0'] {
+  --crg-seat: var(--pico-primary);
+}
+
+[data-seat='1'] {
+  --crg-seat: #7a5b17;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-seat='1'] {
+    --crg-seat: #d5a534;
+  }
+}
+
+.seat-marker {
+  color: var(--crg-seat);
+  font-size: 0.9em;
+  margin-right: 0.35rem;
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border: 2px solid var(--crg-seat);
+  border-radius: 2rem;
+  width: fit-content;
+  margin-inline: auto;
+  font-weight: 700;
+}
+
+.you-chip {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 1rem;
+  background: var(--crg-seat);
+  color: var(--pico-primary-inverse);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.net-status {
+  margin-bottom: 0.5rem;
+  text-align: center;
+  color: var(--pico-muted-color);
+}
+
+.turn[data-your-turn='true'] {
+  color: var(--pico-primary);
+}
+
+/* The rack whose turn it is gets a solid edge; the idle one stays quiet. */
+.rack[data-on-turn='true'] {
+  border-color: var(--crg-seat);
+  border-width: 2px;
+}
+
+.rack[data-you='true'] {
+  background: var(--pico-card-sectioning-background-color);
+}
+
+.room-code {
+  margin: 1rem 0;
+  font-family: var(--pico-font-family-monospace);
+  font-size: clamp(2rem, 9vw, 3rem);
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+
+.room-input {
+  font-family: var(--pico-font-family-monospace);
+  font-size: 1.5rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  min-height: 3.5rem;
+}
+
 /* ---------- share ---------- */
 
 .share {

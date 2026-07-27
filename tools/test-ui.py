@@ -299,6 +299,17 @@ def main() -> int:
             alice.get_by_role("button", name="Create and continue").click()
             alice.get_by_label("Opponent").fill("Bob")
             alice.get_by_role("button", name="Play", exact=True).click()
+            # Seed a rich opening word: a random one can dead-end within a couple
+            # of moves, which would make these checks flaky for no good reason.
+            alice.evaluate(
+                """async () => {
+                    const { createGame } = await import('./src/game.js');
+                    localStorage.setItem(
+                      'crg.game.v1', JSON.stringify(createGame('Alice', 'Bob', 'cold')));
+                }"""
+            )
+            alice.reload()
+            alice.get_by_role("button", name="Resume").click()
             expect(alice.get_by_role("status").first).to_contain_text("Alice's turn.")
             play(alice, engine_move(alice))
             expect(alice.get_by_role("status").first).to_contain_text("Bob's turn.")
@@ -324,15 +335,18 @@ def main() -> int:
                 )
                 == word_after_alice
             )
-            expect(bob.get_by_role("status").first).to_contain_text("Bob's turn.")
+            expect(bob.get_by_role("status").first).to_contain_text("Your turn.")
+            expect(bob.locator(".identity")).to_contain_text("You are Bob")
+            expect(bob.locator('.rack[data-you="true"] h3')).to_contain_text("Bob")
             check("opening the link joins the game at the same position, with no local account")
+            check("the joiner is told which side they are playing")
 
             # Both sides must agree on the spent cards, which travel only implicitly.
             def rack_state(pg, name):
                 return pg.evaluate(
                     """(name) => {
                         const rack = [...document.querySelectorAll('section.rack')]
-                          .find(r => r.querySelector('h3').textContent === name);
+                          .find(r => r.querySelector('h3').textContent.includes(name));
                         return {
                           count: rack.querySelector('.rack-count').textContent.trim(),
                           spent: [...rack.querySelectorAll('.card')]
@@ -352,7 +366,10 @@ def main() -> int:
 
             # Bob replies, and hands a fresh link back to Alice.
             play(bob, engine_move(bob))
-            expect(bob.get_by_role("status").first).to_contain_text("Alice's turn.")
+            expect(bob.get_by_role("status").first).to_contain_text("Waiting for Alice")
+            assert bob.locator("button.tile[disabled]").count() == 4, (
+                "after moving, a link player must not be able to play the other side"
+            )
             reply = bob.locator("#share-url").input_value()
             assert reply != invite, "the link must change after a move"
             assert bob.evaluate("location.hash").startswith("#g="), "the address bar must track the position"
@@ -361,12 +378,15 @@ def main() -> int:
             # A reload of Bob's tab keeps the position: the URL is the only copy.
             bob.reload()
             expect(bob.locator("button.tile")).to_have_count(4)
-            expect(bob.get_by_role("status").first).to_contain_text("Alice's turn.")
+            # A reload re-reads the fragment, so the reloader now holds Alice's seat.
+            expect(bob.get_by_role("status").first).to_contain_text("Your turn.")
+            expect(bob.locator(".identity")).to_contain_text("You are Alice")
             check("reloading a shared game keeps the position")
 
             # Alice opens the reply and sees Bob's move in the history.
             unlock(alice, reply)
-            expect(alice.get_by_role("status").first).to_contain_text("Alice's turn.")
+            expect(alice.get_by_role("status").first).to_contain_text("Your turn.")
+            expect(alice.locator(".identity")).to_contain_text("You are Alice")
             expect(alice.locator(".move-list li")).to_have_count(2)
             expect(alice.locator(".move-list li").first).to_contain_text("Bob")
             check("the opponent's move arrives in the history when the link is opened")
