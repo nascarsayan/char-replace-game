@@ -1,11 +1,22 @@
 import { html, render, useEffect, useState } from '../vendor/preact-standalone.module.js';
 import { applyMove, createGame, resign } from './game.js';
 import { buildShareUrl, readGameFromLocation, writeGameToLocation } from './link.js';
+import { createRoomCode, isRoomCode, normaliseRoomCode } from './net.js';
 import * as store from './store.js';
 import { Board } from './components/Board.js';
 import { Gate } from './components/Gate.js';
+import { LiveGame } from './components/LiveGame.js';
+import { LiveLobby } from './components/LiveLobby.js';
 import { Lobby } from './components/Lobby.js';
 import { SignIn } from './components/SignIn.js';
+
+/** A live invite is `#r=CODE`; a shared position is `#g=…`. */
+function readRoomFromLocation() {
+  const match = /(?:^|[#&])r=([A-Za-z0-9]+)/.exec(window.location.hash || '');
+  if (!match) return null;
+  const code = normaliseRoomCode(match[1]);
+  return isRoomCode(code) ? code : null;
+}
 
 function App() {
   const [unlocked, setUnlocked] = useState(store.isUnlocked);
@@ -14,12 +25,26 @@ function App() {
   const [playing, setPlaying] = useState(false);
   // A game arriving by link: { game } when it decodes, { error } when it does not.
   const [shared, setShared] = useState(readGameFromLocation);
+  // Which side you play in a link game: the side on turn when you opened it.
+  // Fixed for the session, so after you move it correctly reads as the
+  // opponent's turn instead of inviting you to play for them.
+  const [sharedSeat, setSharedSeat] = useState(() => {
+    const initial = readGameFromLocation();
+    return initial && initial.game ? initial.game.turn : null;
+  });
+  // A live game: { role, roomCode }. `invited` is a code from the address bar.
+  const [live, setLive] = useState(null);
+  const [browsingLive, setBrowsingLive] = useState(false);
+  const [invited, setInvited] = useState(readRoomFromLocation);
 
   // Pasting a different link into the same tab changes the fragment without a
   // reload, so the position has to be re-read.
   useEffect(() => {
     function onHashChange() {
-      setShared(readGameFromLocation());
+      const next = readGameFromLocation();
+      setShared(next);
+      setSharedSeat(next && next.game ? next.game.turn : null);
+      setInvited(readRoomFromLocation());
     }
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -60,15 +85,64 @@ function App() {
     }
   }
 
-  function leaveSharedGame() {
+  function clearFragment() {
     // Drop the fragment, or the lobby is immediately replaced by the link again.
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+
+  function leaveSharedGame() {
+    clearFragment();
     setShared(null);
+  }
+
+  function leaveLiveGame() {
+    clearFragment();
+    setLive(null);
+    setInvited(null);
+    setBrowsingLive(false);
+  }
+
+  function hostLiveGame() {
+    const roomCode = createRoomCode();
+    window.history.replaceState(null, '', `#r=${roomCode}`);
+    setBrowsingLive(false);
+    setLive({ role: 'host', roomCode });
+  }
+
+  function joinLiveGame(roomCode) {
+    window.history.replaceState(null, '', `#r=${roomCode}`);
+    setBrowsingLive(false);
+    setInvited(null);
+    setLive({ role: 'guest', roomCode });
   }
 
   let screen;
   if (!unlocked) {
     screen = html`<${Gate} onUnlocked=${() => setUnlocked(true)} />`;
+  } else if (live) {
+    // Keyed on the room so switching rooms tears the old connection down.
+    screen = html`<${LiveGame}
+      key=${`${live.role}:${live.roomCode}`}
+      role=${live.role}
+      roomCode=${live.roomCode}
+      me=${me || 'Guest'}
+      onExit=${leaveLiveGame}
+    />`;
+  } else if (invited && me) {
+    // Arrived on an invite link and already have a name: join straight away.
+    screen = html`<div class="panel">
+      <h2>${`Join live game ${invited}?`}</h2>
+      <p>${`You will play as ${me}.`}</p>
+      <button type="button" class="big" onClick=${() => joinLiveGame(invited)}>Join</button>
+      <button type="button" class="secondary outline" onClick=${leaveLiveGame}>Back</button>
+    </div>`;
+  } else if (browsingLive && me) {
+    screen = html`<${LiveLobby}
+      me=${me}
+      onHost=${hostLiveGame}
+      onJoin=${joinLiveGame}
+      onCancel=${() => setBrowsingLive(false)}
+    />`;
   } else if (shared && shared.error) {
     screen = html`<div class="panel">
       <h2>That link did not work</h2>
@@ -81,6 +155,8 @@ function App() {
     screen = html`<${Board}
       game=${shared.game}
       shareUrl=${buildShareUrl(shared.game)}
+      youAre=${sharedSeat}
+      locked=${sharedSeat !== null && shared.game.turn !== sharedSeat}
       onMove=${(pos, letter) => commitShared(applyMove(shared.game, pos, letter))}
       onResign=${(playerIdx) => commitShared(resign(shared.game, playerIdx))}
       onRematch=${() =>
@@ -103,6 +179,7 @@ function App() {
       me=${me}
       savedGame=${game && !game.outcome ? game : null}
       onStart=${startGame}
+      onPlayLive=${() => setBrowsingLive(true)}
       onResume=${() => setPlaying(true)}
       onDiscard=${() => {
         store.clearGame();
@@ -123,7 +200,7 @@ function App() {
     <main>${screen}</main>
     <footer class="site-foot">
       <small>
-        Play side by side, or send the link after each move.
+        Play live, side by side, or by sending a link after each move.
         ${unlocked
           ? html`<button
               type="button"

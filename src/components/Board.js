@@ -1,5 +1,6 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-standalone.module.js';
 import { LETTERS, WORD_LEN, inspectMove } from '../game.js';
+import { seatMarker, seatShape } from '../seats.js';
 import { Rack } from './Rack.js';
 import { Share } from './Share.js';
 
@@ -10,7 +11,23 @@ function describeMove(game, move) {
   return `${game.players[move.by].name} · slot ${move.pos + 1} → ${move.letter.toUpperCase()}${wildcard}`;
 }
 
-export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
+/**
+ * `youAre` is the seat this browser plays (0, 1, or null when both sides share
+ * the screen). `locked` blocks input while it is the other player's move, which
+ * only applies to a live game.
+ */
+export function Board({
+  game,
+  shareUrl,
+  youAre = null,
+  youLabel,
+  locked = false,
+  status,
+  onMove,
+  onResign,
+  onRematch,
+  onExit,
+}) {
   // Per-turn scratch state lives in a ref with a state mirror for rendering.
   // Keyboard entry is faster than a render pass — typing "1" then "b" would
   // otherwise read a stale `slot` from the closure and drop the letter.
@@ -30,7 +47,6 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
   const { slot, pendingWildcard, message } = scratch;
   const over = Boolean(game.outcome);
   const current = game.players[game.turn];
-  const waiting = game.players[1 - game.turn];
 
   // Every completed move clears the scratch state.
   useEffect(() => {
@@ -38,7 +54,7 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
   }, [game.history.length, over]);
 
   function attempt(letter) {
-    if (over) return;
+    if (over || locked) return;
     const pending = scratchRef.current;
     if (pending.slot === null) {
       update({ message: `Pick a slot first — click a tile or press 1–${WORD_LEN}.` });
@@ -65,6 +81,7 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
   useEffect(() => {
     function onKey(event) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (over || locked) return;
       const target = event.target;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
 
@@ -98,9 +115,14 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
 
   // Sentences are assembled here rather than inline: htm collapses the
   // whitespace between adjacent ${} expressions, which glues words together.
+  const yourTurn = youAre !== null && game.turn === youAre;
   const turnLine = over
     ? `${game.players[game.outcome.loser].name} has no moves left — ${game.players[game.outcome.winner].name} wins.`
-    : `${current.name}'s turn.`;
+    : youAre === null
+      ? `${current.name}'s turn.`
+      : yourTurn
+        ? 'Your turn.'
+        : `Waiting for ${current.name}…`;
 
   const plies = game.history.length;
   const outcomeLine = over
@@ -113,7 +135,17 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
 
   return html`
     <div class="board">
-      <p class="turn" role="status">${turnLine}</p>
+      ${youAre === null
+        ? null
+        : html`<p class="identity" data-seat=${youAre}>
+            <span class="seat-marker" data-shape=${seatShape(youAre)} aria-hidden="true"
+              >${seatMarker(youAre)}</span
+            >
+            ${youLabel || `You are ${game.players[youAre].name}`}
+          </p>`}
+      ${status ? html`<p class="net-status" role="status">${status}</p>` : null}
+
+      <p class="turn" role="status" data-your-turn=${yourTurn}>${turnLine}</p>
 
       <!--
         A radiogroup, not a [role="group"]: picking a slot is a single choice out
@@ -130,7 +162,7 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
               aria-checked=${slot === i}
               aria-label=${`Slot ${i + 1}, letter ${ch}`}
               tabindex=${slot === i || (slot === null && i === 0) ? 0 : -1}
-              disabled=${over}
+              disabled=${over || locked}
               onClick=${() =>
                 // Deliberately not a toggle: re-clicking the chosen slot after a
                 // rejected letter should keep it selected, not silently clear it.
@@ -145,7 +177,13 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
 
       <p class="hint" role="alert" data-kind=${pendingWildcard ? 'wildcard' : 'info'}>
         ${message ||
-        (over ? '' : slot === null ? 'Choose the slot you want to replace.' : `Now pick a letter for slot ${slot + 1}.`)}
+        (over
+          ? ''
+          : locked
+            ? `It is ${current.name}'s move.`
+            : slot === null
+              ? 'Choose the slot you want to replace.'
+              : `Now pick a letter for slot ${slot + 1}.`)}
       </p>
 
       ${pendingWildcard
@@ -172,18 +210,30 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
           </div>`
         : null}
 
-      ${shareUrl
+      <!-- Nothing to hand over until you have actually moved. -->
+      ${shareUrl && (youAre === null || locked || over)
         ? html`<${Share} url=${shareUrl} waitingFor=${current.name} over=${over} />`
         : null}
 
+      <!--
+        Racks stay in seat order rather than moving the player on turn to the
+        front: a rack that jumps sides every move is hard to read, and in a live
+        game "your side" must stay put.
+      -->
       <div class="racks">
-        <${Rack}
-          player=${current}
-          label=${`${current.name} (on turn)`}
-          interactive=${!over}
-          onPlay=${attempt}
-        />
-        <${Rack} player=${waiting} label=${`${waiting.name} (waiting)`} />
+        ${game.players.map(
+          (player, seat) => html`
+            <${Rack}
+              player=${player}
+              seat=${seat}
+              isYou=${youAre === seat}
+              onTurn=${!over && game.turn === seat}
+              label=${`${player.name}${game.turn === seat && !over ? ' (on turn)' : ''}`}
+              interactive=${!over && !locked && game.turn === seat}
+              onPlay=${attempt}
+            />
+          `,
+        )}
       </div>
 
       <section class="history" aria-label="Move history">
@@ -212,10 +262,10 @@ export function Board({ game, shareUrl, onMove, onResign, onRematch, onExit }) {
                     class="danger"
                     onClick=${() => {
                       setConfirmResign(false);
-                      onResign(game.turn);
+                      onResign(youAre === null ? game.turn : youAre);
                     }}
                   >
-                    ${current.name} resigns
+                    ${game.players[youAre === null ? game.turn : youAre].name} resigns
                   </button>
                   <button
                     type="button"

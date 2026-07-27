@@ -12,7 +12,7 @@ function describeSavedGame(game) {
 }
 
 /** Opponent selection. Both players share this screen and keyboard — hotseat. */
-export function Lobby({ me, savedGame, onStart, onResume, onDiscard, onSignOut }) {
+export function Lobby({ me, savedGame, onStart, onPlayLive, onResume, onDiscard, onSignOut }) {
   const [users, setUsers] = useState(listUsers);
   const [opponent, setOpponent] = useState('');
   const [error, setError] = useState('');
@@ -54,7 +54,15 @@ export function Lobby({ me, savedGame, onStart, onResume, onDiscard, onSignOut }
           </div>`
         : null}
 
-      <h2>Start a game</h2>
+      <h2>Play someone else</h2>
+      <p>
+        A live game connects your two browsers directly, so moves appear as they happen. You both
+        need to be online.
+      </p>
+      <button type="button" class="big" onClick=${onPlayLive}>Play live</button>
+
+      <h2>Or play on this device</h2>
+      <p>Take turns on one screen, or send a link after each move.</p>
       <form
         onSubmit=${(e) => {
           e.preventDefault();

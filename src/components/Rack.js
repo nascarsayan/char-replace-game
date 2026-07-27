@@ -1,20 +1,41 @@
 import { html } from '../../vendor/preact-standalone.module.js';
 import { LETTERS, WILDCARDS_PER_PLAYER, cardsLeft, hasWildcard } from '../game.js';
+import { seatMarker, seatShape } from '../seats.js';
 
 /**
  * A player's 27 cards. Both racks are always on screen — knowing what the
  * opponent has left is part of the game.
  *
- * When `interactive` is set the letters are buttons for the player on turn;
- * otherwise the rack is a read-only summary.
+ * `seat` drives the glyph and accent that identify this side; `isYou` marks the
+ * rack as the viewer's own. When `interactive` is set the letters are buttons.
  */
-export function Rack({ player, label, interactive = false, onPlay }) {
+export function Rack({
+  player,
+  label,
+  seat,
+  isYou = false,
+  onTurn = false,
+  interactive = false,
+  onPlay,
+}) {
   const wildcardLeft = hasWildcard(player);
 
   return html`
-    <section class="rack" aria-label=${`${label}: cards remaining`}>
+    <section
+      class="rack"
+      data-seat=${seat}
+      data-you=${isYou}
+      data-on-turn=${onTurn}
+      aria-label=${`${label}: cards remaining`}
+    >
       <header class="rack-head">
-        <h3>${player.name}</h3>
+        <h3>
+          <span class="seat-marker" data-shape=${seatShape(seat)} aria-hidden="true"
+            >${seatMarker(seat)}</span
+          >
+          ${player.name}
+          ${isYou ? html`<span class="you-chip">you</span>` : null}
+        </h3>
         <p class="rack-count">
           <strong>${cardsLeft(player)}</strong> of ${LETTERS.length + WILDCARDS_PER_PLAYER} cards
           left
