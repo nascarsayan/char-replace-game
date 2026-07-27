@@ -1,4 +1,5 @@
 import { html, useState } from '../../vendor/preact-standalone.module.js';
+import { cloudConfigured } from '../cloud.js';
 import { isRoomCode, normaliseRoomCode } from '../net.js';
 
 /** Host a live game, or join one with a code. */
@@ -19,8 +20,9 @@ export function LiveLobby({ me, onHost, onJoin, onCancel }) {
     <div class="panel">
       <h2>Play live</h2>
       <p>
-        You both need to be online at the same time. Moves travel directly between your two
-        browsers.
+        ${cloudConfigured()
+          ? 'Moves are relayed through a database, so the room survives a closed tab and works on any network.'
+          : 'Moves travel directly between your two browsers, so you both need to be online at once. On restrictive networks this can fail to connect — link play always works.'}
       </p>
 
       <button type="button" class="big" onClick=${onHost}>Host a new game</button>
@@ -61,7 +63,7 @@ export function LiveLobby({ me, onHost, onJoin, onCancel }) {
 }
 
 /** Shown to the host while waiting for the other player to arrive. */
-export function WaitingRoom({ roomCode, inviteUrl, onCancel }) {
+export function WaitingRoom({ roomCode, inviteUrl, onCancel, note }) {
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -97,7 +99,12 @@ export function WaitingRoom({ roomCode, inviteUrl, onCancel }) {
       </p>
 
       <p aria-live="polite" class="muted">
-        <small>Connecting through public signalling — this can take a few seconds.</small>
+        <small>
+          ${note ||
+          (cloudConfigured()
+            ? 'The room is saved, so they can join whenever — you do not have to wait here.'
+            : 'Connecting through public signalling — this can take a few seconds.')}
+        </small>
       </p>
 
       <button type="button" class="secondary outline" onClick=${onCancel}>Cancel</button>
