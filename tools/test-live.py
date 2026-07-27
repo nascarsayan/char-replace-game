@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Live (WebRTC) two-player test. Kept separate from tools/test-ui.py because it
-needs real internet: peers find each other through public WebTorrent trackers.
+"""Peer-to-peer (WebRTC) two-player test. Kept separate from tools/test-ui.py
+because it needs real internet: peers find each other through public WebTorrent
+trackers.
 
     python3 tools/test-live.py [--headed] [--timeout 90]
 
 Two independent browser contexts host and join a room, then trade moves.
+
+This is the *fallback* transport, used when no database is configured. The config
+file is served empty here so the fallback is what gets exercised even on a
+checkout that has a database set up — otherwise this would silently test the
+relay instead. tools/test-cloud.py covers that path.
 """
 
 from __future__ import annotations
@@ -25,9 +31,25 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PASSWORD = "chargame"
 
 
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):  # noqa: D102 - quiet
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        # Force the peer-to-peer path regardless of local configuration.
+        if self.path == "/src/cloud-config.js":
+            body = b"export const DATABASE_URL = '';\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
+
+
 def serve(directory: pathlib.Path) -> tuple[str, socketserver.TCPServer]:
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
-    handler.log_message = lambda *a, **k: None  # type: ignore[method-assign]
+    handler = functools.partial(Handler, directory=str(directory))
     httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{httpd.server_address[1]}/", httpd
@@ -130,6 +152,8 @@ def main() -> int:
             # --- host opens a room ---
             sign_in(host, "Alice")
             host.get_by_role("button", name="Play live").click()
+            expect(host.get_by_text("travel directly between your two browsers")).to_be_visible()
+            check("the peer-to-peer fallback is the transport under test")
             host.get_by_role("button", name="Host a new game").click()
             expect(host.get_by_role("heading", name="Waiting for your opponent")).to_be_visible()
             room_code = host.locator(".room-code").inner_text().strip()

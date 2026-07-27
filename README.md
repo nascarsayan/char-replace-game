@@ -51,19 +51,72 @@ Pick **Play live**, then **Host a new game**. You get a six-character room code
 and an invite link; send either to your opponent, who joins with it. Moves then
 appear on both boards as they are made.
 
-The two browsers talk directly over WebRTC. Public WebTorrent trackers are used
-only to introduce the peers — no game data passes through them, and there is no
-server of ours anywhere in the loop.
-
 Each browser holds a **fixed side**: the host plays first, the joiner second. The
 board says which one you are, marks your rack, and refuses input when it is not
 your move.
 
-Being honest about the limits: this needs you both online at the same time, and
-it leans on free public signalling that is occasionally down or rate-limited.
-Very restrictive networks (some corporate NATs) can block the direct connection
-outright, because there is no TURN relay to fall back on. When live will not
-connect, the link method below always works.
+There are two transports, and which one is used depends on whether a database is
+configured (see [Setting up live games](#setting-up-live-games)).
+
+**Relayed (recommended).** Moves go through a Firebase Realtime Database. It works
+on any network, since nothing has to punch through a NAT, and the room *persists*
+— close the tab, come back tomorrow, the game is still there. You do not both
+need to be online at the same moment.
+
+**Peer-to-peer (the fallback, used when no database is configured).** The two
+browsers talk directly over WebRTC, with public WebTorrent trackers only
+introducing the peers. No server is involved and nothing is to set up, but it is
+best-effort: you both have to be online at once, the free trackers are sometimes
+down, and restrictive networks can block the direct connection outright since
+there is no TURN relay. If live will not connect, [link play](#playing-by-link)
+always works.
+
+## Setting up live games
+
+Without this, live play falls back to peer-to-peer and link play is unaffected.
+
+1. At [console.firebase.google.com](https://console.firebase.google.com), create a
+   project. Analytics can be skipped; no card is needed.
+2. **Build → Realtime Database → Create Database**, pick a region, and start in
+   **test mode**.
+3. Copy the URL from the top of that page — it looks like
+   `https://your-project-default-rtdb.firebaseio.com`.
+4. Paste it into `DATABASE_URL` in [`src/cloud-config.js`](src/cloud-config.js).
+
+That is the only value needed: the REST API this uses takes no API key while the
+rules are open, and no SDK is bundled — writes are `fetch`, updates arrive over
+`EventSource`.
+
+Test mode leaves the database world-readable and world-writable, and expires after
+30 days. Replace the rules with something that at least confines access to game
+rooms and keeps entries small:
+
+```json
+{
+  "rules": {
+    "rooms": {
+      "$room": {
+        ".read": "$room.length == 6",
+        ".write": "$room.length == 6 && newData.hasChildren()",
+        "state": { ".validate": "newData.isString() && newData.val().length < 4096" },
+        "host": { ".validate": "newData.isString() && newData.val().length <= 24" },
+        "guest": { ".validate": "newData.isString() && newData.val().length <= 24" },
+        "updatedAt": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}
+```
+
+Be clear-eyed about what that does and does not buy you: it stops anything being
+written outside `/rooms`, caps the sizes, and rejects unknown fields — but rooms
+are still readable and writable by anyone who knows or guesses a six-character
+code. That is obscurity, not authentication. A position pushed into a room is
+still replayed through the rules before it is shown, so a tampered one is rejected
+rather than trusted, but nothing stops a stranger who guesses your code from
+joining. For a word game among friends that is a reasonable trade; if it ever
+mattered, the fix is Firebase Auth and per-room ownership rules.
 
 ## Playing by link
 
@@ -117,12 +170,14 @@ modules, which browsers only load over http(s).
 | `src/store.js` | localStorage: users, session, saved local game. |
 | `src/definitions.js` | Lazily fetches the definition file; degrades quietly if it fails. |
 | `src/link.js` | Encodes a game into a shareable URL fragment, and validates one on the way back in. |
-| `src/net.js` | Live games: joins a room over WebRTC and validates every position that arrives. |
+| `src/cloud.js` | Relayed live games: Firebase Realtime Database over plain `fetch` + `EventSource`, no SDK. |
+| `src/cloud-config.js` | Where the database URL goes. Empty by default. |
+| `src/net.js` | Peer-to-peer live games over WebRTC, used when no database is configured. |
 | `src/seats.js` | The per-seat glyphs that say which side is which. |
 | `src/components/` | Preact components, written with `htm` tagged templates (no JSX, no transpiler). |
 | `vendor/` | Pinned copies of Pico CSS, preact+htm and Trystero, so the page needs no CDN at runtime. |
 | `assets/definitions.json` | Generated glosses, ~267 KiB, fetched in the background rather than blocking play. |
-| `tools/` | The two data generators and the four test suites. |
+| `tools/` | The two data generators and the five test suites. |
 
 State lives in one plain object that round-trips through `JSON.stringify`, which
 is why an unfinished game survives a reload.
@@ -159,6 +214,14 @@ host and join a room and trade moves for real:
 
 ```sh
 python3 tools/test-live.py
+```
+
+The relayed transport is tested against a stand-in for the database, so it needs
+no Firebase project and no internet. The emulator is strict about the shape of
+what the client writes, so a change that Firebase would reject fails here:
+
+```sh
+python3 tools/test-cloud.py
 ```
 
 ## Regenerating the word data

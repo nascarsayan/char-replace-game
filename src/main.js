@@ -1,10 +1,12 @@
 import { html, render, useEffect, useState } from '../vendor/preact-standalone.module.js';
 import { applyMove, applySkip, createGame, resign } from './game.js';
 import { buildShareUrl, readGameFromLocation, writeGameToLocation } from './link.js';
+import { cloudConfigured } from './cloud.js';
 import { createRoomCode, isRoomCode, normaliseRoomCode } from './net.js';
 import * as store from './store.js';
 import { Board } from './components/Board.js';
 import { Gate } from './components/Gate.js';
+import { CloudGame } from './components/CloudGame.js';
 import { LiveGame } from './components/LiveGame.js';
 import { LiveLobby } from './components/LiveLobby.js';
 import { Lobby } from './components/Lobby.js';
@@ -120,8 +122,11 @@ function App() {
   if (!unlocked) {
     screen = html`<${Gate} onUnlocked=${() => setUnlocked(true)} />`;
   } else if (live) {
+    // A relayed room is reliable and persists, so it is preferred whenever a
+    // database is configured; otherwise fall back to peer-to-peer.
+    const Live = cloudConfigured() ? CloudGame : LiveGame;
     // Keyed on the room so switching rooms tears the old connection down.
-    screen = html`<${LiveGame}
+    screen = html`<${Live}
       key=${`${live.role}:${live.roomCode}`}
       role=${live.role}
       roomCode=${live.roomCode}
