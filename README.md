@@ -157,6 +157,22 @@ Decoding replays every move through the same `applyMove` the UI uses, so a
 truncated or hand-edited link is rejected with a reason rather than loading a
 board that could not have arisen from legal play.
 
+### Older links
+
+Links carry a format version, currently 3, and older ones are still read. The only
+rule that has changed is which letter the bot plays when a turn is given up, so a
+link made by an earlier version replays identically as long as it contains no
+skips — which covers nearly all of them, and means an old link, or a room written
+by a tab nobody has reloaded, keeps working. An older link that *does* contain a
+skip would land on a different board, so it is refused and says why. Anything
+written from here on uses the current format.
+
+`node tools/migrate-rooms.mjs` reports on the live rooms in the database and can
+normalise them, though it rarely needs to: a room left alone becomes current the
+next time someone moves. Note that rewriting a room a player still has open will
+break their tab if it is running older code — and their next move will overwrite
+the rewrite.
+
 That validation stops corruption, not cheating: either player can replay their
 own link and move for the other side, and nothing prevents it. Same trust model
 as the password — fine among friends, not a tournament server.

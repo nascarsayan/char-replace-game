@@ -11,10 +11,14 @@
 import { WORD_LEN, applyMove, applySkip, createGame, resign } from './game.js';
 import { WORD_SET } from './words.js';
 
-// Version 3: the bot's letter must now be one the skipping player still holds,
-// so replaying an older link's skips would land on a different board. Refusing
-// them beats silently disagreeing.
+// Version 3 changed one thing: the bot's letter when a turn is given up must now
+// be one the skipping player still holds. That only alters how a *skip* replays,
+// so an older link is still read as long as it contains no skips — which is most
+// of them, and means an old link or a room written by a tab that has not been
+// reloaded keeps working. An older link that does contain a skip would replay
+// onto a different board, so that one is refused with the reason.
 const VERSION = 3;
+const OLDEST_READABLE_VERSION = 1;
 export const FRAGMENT_KEY = 'g';
 
 function toBase64Url(text) {
@@ -91,7 +95,15 @@ export function decodeGame(encoded) {
   if (!Array.isArray(payload) || payload.length < 5) throw new Error('This link is not a game.');
 
   const [version, nameA, nameB, startWord, packedMoves, resignedBy] = payload;
-  if (version !== VERSION) throw new Error(`This link was made by a different version (${version}).`);
+  if (!Number.isInteger(version) || version < OLDEST_READABLE_VERSION || version > VERSION) {
+    throw new Error(`This link was made by a different version (${version}).`);
+  }
+  if (version < VERSION && typeof packedMoves === 'string' && packedMoves.includes(SKIP_TOKEN)) {
+    throw new Error(
+      'This game was recorded before the bot stopped using wildcards, and one of its ' +
+        'skipped turns would now replay differently. It cannot be continued.',
+    );
+  }
   if (typeof nameA !== 'string' || typeof nameB !== 'string' || !nameA || !nameB) {
     throw new Error('This link is missing a player name.');
   }
