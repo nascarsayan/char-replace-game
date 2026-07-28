@@ -2,6 +2,7 @@ import { html } from '../../vendor/preact-standalone.module.js';
 import {
   CARDS_PER_PLAYER,
   LETTERS,
+  PASS_LEAD_TO_WIN,
   SKIPS_PER_PLAYER,
   WILDCARDS_PER_PLAYER,
   WORD_LEN,
@@ -17,10 +18,10 @@ const RULES = [
   'No word may appear twice in the same game.',
   `The letter you place is a card, and it is spent. You hold ${LETTERS.length} letter cards plus ${WILDCARDS_PER_PLAYER} wildcard — ${CARDS_PER_PLAYER} in total.`,
   'The wildcard lets you replay one letter you have already spent. The result still has to be a real word. You get one, ever.',
-  `Do not know a word? Give up the turn. A bot plays one for you, using a letter you still hold — never your wildcard — and that letter is struck off BOTH racks. You get ${SKIPS_PER_PLAYER} of these.`,
-  'So a skip needs a spare letter of your own. Once every letter that fits is one you have spent, the wildcard is the only way on, and the board says so.',
-  'Stuck for ideas either way? The hint button shows a playable move, and warns you if it would cost your wildcard.',
-  'You lose when you have no legal move at all.',
+  `Do not know a word? Pass. A bot plays one for you, using a letter one of you still holds — never a wildcard — and that letter is struck off BOTH racks. You get ${SKIPS_PER_PLAYER} passes.`,
+  `Passing hands a point to your opponent. Go ${PASS_LEAD_TO_WIN} clear passes behind and you lose, however many words are left.`,
+  'The board says how many words you can play without your wildcard. At zero, the wildcard is the only way on — the hint button will show you a move, and warns when it costs the wildcard.',
+  'You also lose if no word at all is left to you, wildcard included.',
 ];
 
 export function Rules({ open = false }) {

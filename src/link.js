@@ -16,6 +16,7 @@ import {
   createGame,
   legacyBotMove,
   legalMoves,
+  passerOnlyBotMove,
   resign,
   settle,
 } from './game.js';
@@ -24,15 +25,17 @@ import { WORD_SET } from './words.js';
 // Every version is still readable, and each one's skips are replayed with the bot
 // rule that was in force when they were recorded:
 //
-//   1  no skips existed yet
-//   2  the bot ignored rack limits            -> legacyBotMove
-//   3  the bot had to use a letter the giver still held -> botMove
-//   4  the skip records the letter it used, so nothing is recomputed
+//   1  no passes existed yet
+//   2  the bot ignored rack limits                      -> legacyBotMove
+//   3  the bot needed a letter the passer still held     -> passerOnlyBotMove
+//   4  the pass records the letter it used, so nothing is recomputed
+//   5  the bot may use a letter either player holds, and passes score
 //
-// Version 4 exists to end that pattern: recomputing the bot's choice meant any
-// change to how it chooses stranded games already in progress. Writing the letter
-// down costs nothing and makes a recorded game replay the same way for good.
-const VERSION = 4;
+// From version 4 the letter is written down, which is what stops a change to how
+// the bot chooses from stranding a game in progress — as versions 3 and 5 both
+// were. Versions before 5 also predate passes deciding the game, so they are
+// replayed without that rule and meet it once at the end.
+const VERSION = 5;
 const OLDEST_READABLE_VERSION = 1;
 
 /** Exported so tools cannot drift out of step with the format they rewrite. */
@@ -142,13 +145,15 @@ export function decodeGame(encoded) {
   let game = createGame(nameA, nameB, startWord);
 
   // Whichever bot rule was in force when this game was recorded. Only needed for
-  // skips written before version 4, which did not record their letter.
-  const resolveSkip = version >= 3 ? botMove : legacyBotMove;
+  // passes written before version 4, which did not record their letter.
+  const resolveSkip = version === 3 ? passerOnlyBotMove : version === 2 ? legacyBotMove : botMove;
   // Versions 1 and 2 also ended the game later: back then a skip could rescue a
   // player with no move, so replaying under today's rule would declare the game
   // over partway through one that really did carry on. The old rule is used for
   // the replay, and the current one applied once at the end.
-  const legacyRules = version <= 2 || legacyFlag === true;
+  // Passes only started deciding games in version 5, so everything older is
+  // replayed under the end rules of its own time.
+  const legacyRules = version < VERSION || legacyFlag === true;
   const options = legacyRules ? { legacyOutcome: true } : {};
 
   // Set only if the old end rule actually kept a game alive that today's rule

@@ -12,12 +12,14 @@ import {
   createGame,
   hasWildcard,
   inspectMove,
+  PASS_LEAD_TO_WIN,
   hint,
   legalMoves,
   needsWildcard,
   normalMoves,
   randomStartWord,
   resign,
+  scoreFor,
   skipsLeft,
 } from '../src/game.js';
 import { WORDS, WORD_SET, isWord } from '../src/words.js';
@@ -133,17 +135,22 @@ test('a player with an empty deck has no moves', () => {
   assert.equal(legalMoves(g).length, 0);
 });
 
-test('a stranded opponent must use their wildcard, and cannot skip instead', () => {
+test('a stranded player can pass, because the bot may use the other rack', () => {
   const g = createGame('A', 'B', 'cold');
   g.players[1].spent = 'abcdefghijklmnopqrstuvwxyz'.split(''); // wildcard still held
   const after = applyMove(g, 0, 'b'); // A: cold -> bold
-  assert.equal(after.outcome, null, 'the wildcard is still a way out');
-  assert.equal(normalMoves(after).length, 0);
-  assert.ok(legalMoves(after).length > 0);
+
+  assert.equal(after.outcome, null);
+  assert.equal(normalMoves(after).length, 0, 'nothing B can play from its own rack');
   assert.equal(needsWildcard(after), true);
-  // A skip would need the bot to play a letter B still holds, and there is none.
-  assert.equal(canSkip(after), false);
-  assert.throws(() => applySkip(after), /no plain letter/);
+
+  // This is the point of widening the rule: a pass is possible exactly when the
+  // passer has nothing of their own left.
+  assert.equal(canSkip(after), true);
+  const passed = applySkip(after);
+  const letter = passed.history[passed.history.length - 1].letter;
+  assert.ok(!after.players[0].spent.includes(letter), "the letter came from A's rack");
+  assert.deepEqual(passed.players.map((p) => p.wildcardsUsed), [0, 0]);
 });
 
 test('the move that strands an opponent with no wildcard ends the game', () => {
@@ -156,16 +163,23 @@ test('the move that strands an opponent with no wildcard ends the game', () => {
   assert.equal(needsWildcard(after), false, 'a finished game needs nothing');
 });
 
-test('the bot only plays a letter the giver still holds', () => {
+test('the bot plays a letter one of the two still holds, never a wildcard', () => {
   const g = createGame('A', 'B', 'cold');
-  assert.deepEqual(botMove(g), { pos: 0, letter: 'b', word: 'bold', kind: 'normal' });
+  assert.deepEqual(botMove(g), { pos: 0, letter: 'b', word: 'bold', kind: 'skip' });
 
-  // Spend 'b': the bot must move on rather than replay it with a wildcard.
-  g.players[0].spent = ['b'];
-  const move = botMove(g);
-  assert.notEqual(move.letter, 'b');
-  assert.equal(move.kind, 'normal');
-  assert.ok(!g.players[0].spent.includes(move.letter));
+  // Spent by the passer but not the opponent: still fair game, and it costs
+  // nobody a wildcard.
+  const shared = createGame('A', 'B', 'cold');
+  shared.players[0].spent = ['b'];
+  assert.equal(botMove(shared).letter, 'b', 'B still holds it');
+  const passed = applySkip(shared);
+  assert.deepEqual(passed.players.map((p) => p.wildcardsUsed), [0, 0]);
+
+  // Spent by both: the bot has to look further.
+  const neither = createGame('A', 'B', 'cold');
+  neither.players[0].spent = ['b'];
+  neither.players[1].spent = ['b'];
+  assert.notEqual(botMove(neither).letter, 'b');
 });
 
 test("a skip never spends anybody's wildcard", () => {
@@ -242,7 +256,7 @@ test('a fresh game gives both players their skips', () => {
 
 test('the bot move is deterministic and never repeats a played word', () => {
   const g = createGame('A', 'B', 'cold');
-  assert.deepEqual(botMove(g), { pos: 0, letter: 'b', word: 'bold', kind: 'normal' });
+  assert.deepEqual(botMove(g), { pos: 0, letter: 'b', word: 'bold', kind: 'skip' });
   assert.deepEqual(botMove(g), botMove(g), 'must not vary between calls');
 
   const seen = createGame('A', 'B', 'cold');
@@ -271,15 +285,67 @@ test('giving up the turn costs both players the letter', () => {
   assert.equal(skipsLeft(after.players[0]), SKIPS_PER_PLAYER - 1);
 });
 
-test('the giver always spends a fresh card, never one already gone', () => {
+test('a pass never spends a card twice, on either side', () => {
   const g = createGame('A', 'B', 'cold');
   g.players[0].spent = ['b'];
-  const move = botMove(g);
-  assert.notEqual(move.letter, 'b', 'the bot must not pick a letter the giver spent');
-
+  const letter = botMove(g).letter;
   const after = applySkip(g);
-  assert.deepEqual(after.players[0].spent, ['b', move.letter].sort());
-  assert.equal(after.players[0].wildcardsUsed, 0, 'and never through the wildcard');
+  for (const player of after.players) {
+    assert.equal(
+      new Set(player.spent).size,
+      player.spent.length,
+      'no duplicate cards after a pass',
+    );
+    assert.ok(player.spent.includes(letter));
+  }
+  assert.deepEqual(after.players.map((p) => p.wildcardsUsed), [0, 0]);
+});
+
+test('passing scores for the other player', () => {
+  const g = createGame('A', 'B', 'cold');
+  assert.equal(scoreFor(g, 0), 0);
+  assert.equal(scoreFor(g, 1), 0);
+
+  const passed = applySkip(g); // A passes
+  assert.equal(scoreFor(passed, 1), 1, 'B is a point up');
+  assert.equal(scoreFor(passed, 0), 0);
+});
+
+test('falling two clear passes behind loses the game', () => {
+  let g = createGame('A', 'B', 'cold');
+  g = applySkip(g); // A passes, 1-0 to B
+  assert.equal(g.outcome, null, 'one pass behind is survivable');
+
+  const reply = normalMoves(g)[0];
+  g = applyMove(g, reply.pos, reply.letter); // B plays on
+  assert.equal(g.outcome, null);
+
+  g = applySkip(g); // A passes again, 2-0
+  assert.deepEqual(g.outcome, { loser: 0, winner: 1, reason: 'passes' });
+  assert.equal(scoreFor(g, 1), PASS_LEAD_TO_WIN);
+});
+
+test('trading passes keeps the game level and alive', () => {
+  let g = createGame('A', 'B', 'cold');
+  g = applySkip(g);
+  g = applySkip(g);
+  assert.equal(g.outcome, null, 'one each is level');
+  assert.deepEqual(g.players.map((p) => p.skipsUsed), [1, 1]);
+});
+
+test('the number of moves that avoid the wildcard is available as a hint', () => {
+  const g = createGame('A', 'B', 'cold');
+  const count = normalMoves(g).length;
+  assert.ok(count > 0);
+  // Every one of them must actually be playable without a wildcard.
+  for (const move of normalMoves(g)) {
+    assert.equal(inspectMove(g, move.pos, move.letter).kind, 'normal');
+  }
+
+  const cornered = createGame('A', 'B', 'cold');
+  cornered.players[0].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+  assert.equal(normalMoves(cornered).length, 0);
+  assert.equal(needsWildcard(cornered), true);
 });
 
 test('applySkip does not mutate the state it was given', () => {
@@ -311,7 +377,7 @@ test('a skip is impossible when the bot has nowhere to go', () => {
   g.usedWords = ['cold', ...neighbours];
   assert.equal(botMove(g), null);
   assert.equal(canSkip(g), false);
-  assert.throws(() => applySkip(g), /no plain letter/);
+  assert.throws(() => applySkip(g), /no word left/);
 });
 
 test('resigning hands the win to the other player', () => {
@@ -341,8 +407,14 @@ test('a full random game terminates with exactly one loser', () => {
       assert.ok(turns < 400, 'game failed to terminate');
     }
     assert.ok(g.outcome.winner !== g.outcome.loser);
-    assert.equal(g.outcome.reason, 'stuck');
-    assert.equal(g.outcome.loser, g.turn, 'the stuck player is the one on turn');
+    assert.ok(['stuck', 'passes'].includes(g.outcome.reason), g.outcome.reason);
+    if (g.outcome.reason === 'stuck') {
+      assert.equal(g.outcome.loser, g.turn, 'the stuck player is the one on turn');
+      assert.equal(legalMoves(g).length, 0);
+    } else {
+      const [a, b] = g.players.map((p) => p.skipsUsed);
+      assert.ok(Math.abs(a - b) >= PASS_LEAD_TO_WIN, `passes were ${a}-${b}`);
+    }
     assert.equal(new Set(g.usedWords).size, g.usedWords.length, 'a word repeated');
     for (const p of g.players) {
       assert.ok(p.spent.length <= 26 && p.wildcardsUsed <= 1);

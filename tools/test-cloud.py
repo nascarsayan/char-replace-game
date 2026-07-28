@@ -466,7 +466,7 @@ def main() -> int:
             check("the guest's reply reaches the host, and both histories match")
 
             # --- a skip relays too, with the bot's word derived on both sides ---
-            host.get_by_role("button", name="Give up turn").click()
+            host.get_by_role("button", name="Pass (", exact=False).click()
             host.locator(".confirm .danger").click()
             expect(guest.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
             assert board_word(host) == board_word(guest)

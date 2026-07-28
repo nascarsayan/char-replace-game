@@ -39,6 +39,11 @@ export function Rack({
         <p class="rack-count">
           <strong>${cardsLeft(player)}</strong> of ${LETTERS.length + WILDCARDS_PER_PLAYER} cards
           left
+          ${player.skipsUsed
+            ? html`<span class="rack-passes"
+                >${`· passed ${player.skipsUsed} ${player.skipsUsed === 1 ? 'time' : 'times'}`}</span
+              >`
+            : null}
         </p>
       </header>
 

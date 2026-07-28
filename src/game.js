@@ -6,6 +6,9 @@ export const LETTERS = 'abcdefghijklmnopqrstuvwxyz'.split('');
 export const WORD_LEN = 4;
 export const WILDCARDS_PER_PLAYER = 1;
 export const SKIPS_PER_PLAYER = 5;
+// Fall this far behind on passes and you have lost: passing hands the initiative
+// over, and two clear passes is the point at which it has been handed over for good.
+export const PASS_LEAD_TO_WIN = 2;
 
 // A player's deck is 26 letter cards plus one wildcard: 27 cards in total.
 export const CARDS_PER_PLAYER = LETTERS.length + WILDCARDS_PER_PLAYER;
@@ -78,25 +81,46 @@ export function normalMoves(state) {
   return legalMoves(state).filter((move) => move.kind === 'normal');
 }
 
-/**
- * The move the bot plays when someone gives up their turn.
- *
- * It may only play a card the player on turn could have played themselves — a
- * letter they have not spent. The bot is never allowed to spend a wildcard, so
- * this is exactly the set of normal moves, and the first one in slot-then-letter
- * order is taken. Determinism matters: share links and live peers replay a skip
- * rather than transmitting what the bot chose, so both sides must agree.
- */
-export function botMove(state) {
+/** Passes are what score: every pass hands a point to the other player. */
+export function scoreFor(state, seat) {
+  return state.players[1 - seat].skipsUsed || 0;
+}
+
+/** The bot rule from versions 3 and 4: only a letter the passer still held. */
+export function passerOnlyBotMove(state) {
   if (state.outcome) return null;
   return normalMoves(state)[0] || null;
 }
 
 /**
- * Skipping needs a plain letter for the bot to play, so it is unavailable
- * precisely when the player has no move that avoids their wildcard. Being out of
- * ordinary moves is therefore what the wildcard is for, not what a skip is for.
+ * The move the bot plays when someone gives up their turn.
+ *
+ * The letter has to be one *either* player still holds. Restricting it to the
+ * passer's own rack meant a pass was impossible exactly when it was most needed —
+ * when every letter that still fits is one you have spent — so the widening is
+ * what lets two passes in a row both find a word. A wildcard is still never
+ * spent, by anyone.
+ *
+ * The first candidate in slot-then-letter order wins, and that determinism
+ * matters: a share link or a live peer replays a pass, so both sides have to
+ * arrive at the same word.
  */
+export function botMove(state) {
+  if (state.outcome) return null;
+  const held = (letter) => state.players.some((player) => !player.spent.includes(letter));
+  for (let pos = 0; pos < WORD_LEN; pos++) {
+    for (const letter of LETTERS) {
+      if (letter === state.word[pos]) continue;
+      if (!held(letter)) continue;
+      const next = replaceAt(state.word, pos, letter);
+      if (!WORD_SET.has(next) || state.usedWords.includes(next)) continue;
+      return { pos, letter, word: next, kind: 'skip' };
+    }
+  }
+  return null;
+}
+
+/** Passing needs a word the bot can reach with a letter somebody still holds. */
 export function canSkip(state) {
   if (state.outcome) return false;
   return skipsLeft(state.players[state.turn]) > 0 && botMove(state) !== null;
@@ -200,11 +224,7 @@ export function applySkip(state) {
   const player = state.players[state.turn];
   if (skipsLeft(player) <= 0) throw new Error(`${player.name} has no skips left.`);
   const move = botMove(state);
-  if (!move) {
-    throw new Error(
-      `${player.name} has no plain letter left for the bot to play — that needs the wildcard.`,
-    );
-  }
+  if (!move) throw new Error('There is no word left for the bot to play.');
   return applyRecordedSkip(state, move.pos, move.letter);
 }
 
@@ -299,6 +319,20 @@ export function resign(state, playerIdx) {
  */
 function settleOutcome(state, legacyOutcome = false) {
   if (state.outcome) return state;
+
+  // Passing scores for the other player, so falling two clear passes behind ends
+  // it whether or not there are still words on the board. Older games predate
+  // this, and are replayed without it.
+  if (!legacyOutcome) {
+    const [passesA, passesB] = state.players.map((player) => player.skipsUsed || 0);
+    const behind = passesA - passesB;
+    if (Math.abs(behind) >= PASS_LEAD_TO_WIN) {
+      const loser = behind > 0 ? 0 : 1;
+      state.outcome = { loser, winner: 1 - loser, reason: 'passes' };
+      return state;
+    }
+  }
+
   if (legalMoves(state).length > 0) return state;
   const rescuedByOldRule =
     legacyOutcome && skipsLeft(state.players[state.turn]) > 0 && legacyBotMove(state) !== null;
