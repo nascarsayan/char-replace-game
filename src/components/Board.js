@@ -1,11 +1,14 @@
 import { html, useEffect, useRef, useState } from '../../vendor/preact-standalone.module.js';
 import {
   LETTERS,
+  PASS_LEAD_TO_WIN,
   WORD_LEN,
   canSkip,
   hint,
   inspectMove,
   needsWildcard,
+  normalMoves,
+  scoreFor,
   skipsLeft,
 } from '../game.js';
 import { seatMarker, seatShape } from '../seats.js';
@@ -154,22 +157,33 @@ export function Board({
   // loud: the wildcard is the only way on, and a skip cannot help here because
   // the bot is not allowed to spend it.
   const wildcardOnly = !locked && needsWildcard(game);
+  // Shown rather than hidden: knowing how much room is left is the useful part of
+  // a hint, and it gives away none of the words. Withheld when cornered, because
+  // the banner below already says as much and saying it twice reads like a stutter.
+  const roomLeft = over || locked || wildcardOnly ? null : normalMoves(game).length;
+  const passes = game.players.map((player) => player.skipsUsed || 0);
+  const passLead = Math.abs(passes[0] - passes[1]);
+  const passLeader = passes[0] < passes[1] ? 0 : 1;
 
   const shownHint = hintIndex === null ? null : hint(game, hintIndex);
 
   const skipLabel = !skipAvailable
     ? skipsRemaining === 0
-      ? 'No skips left'
-      : 'Skip needs a spare letter'
-    : `Give up turn (${skipsRemaining} left)`;
+      ? 'No passes left'
+      : 'No word left to pass with'
+    : `Pass (${skipsRemaining} left)`;
 
   const plies = game.history.length;
+  const outcomeReason =
+    over && game.outcome.reason === 'resigned'
+      ? 'resigned'
+      : over && game.outcome.reason === 'passes'
+        ? `fell ${PASS_LEAD_TO_WIN} passes behind`
+        : 'ran out of legal moves';
   const outcomeLine = over
-    ? [
-        game.players[game.outcome.loser].name,
-        game.outcome.reason === 'resigned' ? 'resigned' : 'ran out of legal moves',
-        `after ${plies} ${plies === 1 ? 'move' : 'moves'}.`,
-      ].join(' ')
+    ? `${game.players[game.outcome.loser].name} ${outcomeReason} after ${plies} ${
+        plies === 1 ? 'move' : 'moves'
+      }.`
     : '';
 
   return html`
@@ -215,6 +229,20 @@ export function Board({
       </div>
 
       <${Definition} word=${game.word} />
+
+      ${roomLeft === null
+        ? null
+        : html`<p class="room-left">
+            ${`${roomLeft} ${roomLeft === 1 ? 'word' : 'words'} playable without your ★ wildcard`}
+          </p>`}
+
+      ${over || passLead === 0
+        ? null
+        : html`<p class="pass-warning" role="status">
+            ${passLead >= PASS_LEAD_TO_WIN - 1
+              ? `${game.players[passLeader].name} is one pass from winning — ${passes[0]}–${passes[1]} on passes.`
+              : `Passes: ${game.players[0].name} ${passes[0]}, ${game.players[1].name} ${passes[1]}.`}
+          </p>`}
 
       <p class="hint" role="alert" data-kind=${pendingWildcard || wildcardOnly ? 'wildcard' : 'info'}>
         ${message ||
@@ -330,7 +358,7 @@ export function Board({
             ${locked
               ? null
               : confirmSkip
-              ? html`<span class="confirm" role="group" aria-label="Confirm giving up the turn">
+              ? html`<span class="confirm" role="group" aria-label="Confirm passing">
                   <button
                     type="button"
                     class="danger"
@@ -339,7 +367,7 @@ export function Board({
                       onSkip();
                     }}
                   >
-                    ${`Give up the turn — costs ${skipTarget.name} and ${game.players[1 - skipSeat].name} the letter`}
+                    ${`Pass — the bot plays, and the letter it uses goes from both racks`}
                   </button>
                   <button type="button" class="secondary" onClick=${() => setConfirmSkip(false)}>
                     Keep thinking

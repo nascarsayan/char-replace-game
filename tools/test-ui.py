@@ -241,14 +241,14 @@ def main() -> int:
             )
             page.reload()
             page.get_by_role("button", name="Resume").click()
-            expect(page.get_by_role("button", name="Give up turn (5 left)")).to_be_visible()
+            expect(page.get_by_role("button", name="Pass (5 left)")).to_be_visible()
             bot = page.evaluate(
                 """async () => {
                     const { botMove } = await import('./src/game.js');
                     return botMove(JSON.parse(localStorage.getItem('crg.game.v1')));
                 }"""
             )
-            page.get_by_role("button", name="Give up turn").click()
+            page.get_by_role("button", name="Pass (", exact=False).click()
             page.locator(".confirm .danger").click()
 
             expect(page.locator("button.tile span").nth(bot["pos"])).to_have_text(
@@ -277,7 +277,7 @@ def main() -> int:
             )
             check("the bot's move spends no wildcard on either side")
 
-            expect(page.get_by_role("button", name="Give up turn (5 left)")).to_be_visible()
+            expect(page.get_by_role("button", name="Pass (5 left)")).to_be_visible()
             expect(page.locator(".move-list li").first).to_contain_text("Sayan skipped")
             expect(page.locator(".move-list li").first).to_contain_text("both racks lose")
             check("only the player who gave up spends a skip, and the history records it")
@@ -296,10 +296,11 @@ def main() -> int:
             expect(page.get_by_role("alert").first).to_contain_text("only your ★ wildcard can move")
             check("a wildcard-only position is announced on the board")
 
-            no_skip = page.get_by_role("button", name="Skip needs a spare letter")
-            expect(no_skip).to_be_visible()
-            expect(no_skip).to_be_disabled()
-            check("a skip cannot stand in for the wildcard, and says why")
+            # A cornered player can still pass: the bot is allowed to use a letter
+            # the opponent holds, which is the whole point of that rule.
+            pass_button = page.get_by_role("button", name="Pass (5 left)")
+            expect(pass_button).to_be_enabled()
+            check("a cornered player can still pass, using the opponent's letter")
 
             page.get_by_role("button", name="Hint", exact=True).click()
             answer = page.locator(".hint-answer")
@@ -335,6 +336,85 @@ def main() -> int:
             )
             check("a suggested move is actually playable, and costs no wildcard")
 
+            # --- the count of wildcard-free moves is shown, and is right ---
+            page.evaluate(
+                """async () => {
+                    const { createGame } = await import('./src/game.js');
+                    localStorage.setItem(
+                      'crg.game.v1', JSON.stringify(createGame('Sayan', 'Riya', 'cold')));
+                }"""
+            )
+            page.reload()
+            page.get_by_role("button", name="Resume").click()
+            expected_count = page.evaluate(
+                """async () => {
+                    const { normalMoves } = await import('./src/game.js');
+                    return normalMoves(JSON.parse(localStorage.getItem('crg.game.v1'))).length;
+                }"""
+            )
+            shown = page.locator(".room-left").inner_text()
+            assert str(expected_count) in shown, (expected_count, shown)
+            assert "without your" in shown, shown
+            check(f"the board says how many words need no wildcard ({expected_count})")
+
+            # In a cornered position it must say there are none, not "0 words".
+            page.evaluate(
+                """async () => {
+                    const { createGame } = await import('./src/game.js');
+                    const g = createGame('Sayan', 'Riya', 'cold');
+                    g.players[0].spent = 'abcdefghijklmnopqrstuvwxyz'.split('');
+                    localStorage.setItem('crg.game.v1', JSON.stringify(g));
+                }"""
+            )
+            page.reload()
+            page.get_by_role("button", name="Resume").click()
+            # The banner covers it, so the count line stands down rather than
+            # saying the same thing twice.
+            expect(page.locator(".room-left")).to_have_count(0)
+            expect(page.get_by_role("alert").first).to_contain_text("only your ★ wildcard can move")
+            page.get_by_role("button", name="Hint", exact=True).click()
+            page.screenshot(path=str(shots / "12-cornered.png"), full_page=True)
+            check("a cornered board says it once, not twice")
+
+            # --- passing scores, and two clear passes wins ---
+            page.evaluate(
+                """async () => {
+                    const { createGame } = await import('./src/game.js');
+                    localStorage.setItem(
+                      'crg.game.v1', JSON.stringify(createGame('Sayan', 'Riya', 'cold')));
+                }"""
+            )
+            page.reload()
+            page.get_by_role("button", name="Resume").click()
+
+            def take_pass(pg):
+                pg.get_by_role("button", name="Pass (", exact=False).click()
+                pg.locator(".confirm .danger").click()
+
+            take_pass(page)  # Sayan passes: Riya leads 1-0
+            expect(page.locator(".pass-warning")).to_contain_text("one pass from winning")
+            expect(page.locator(".rack", has_text="Sayan").first).to_contain_text("passed 1 time")
+            check("a pass is scored against the passer, and the lead is called out")
+
+            # Riya plays on, then Sayan passes again and is two clear passes behind.
+            move = page.evaluate(
+                """async () => {
+                    const { normalMoves } = await import('./src/game.js');
+                    return normalMoves(JSON.parse(localStorage.getItem('crg.game.v1')))[0];
+                }"""
+            )
+            page.locator("button.tile").nth(move["pos"]).click()
+            page.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
+            take_pass(page)
+
+            expect(page.locator(".outcome h2")).to_contain_text("Riya wins")
+            expect(page.locator(".outcome")).to_contain_text("fell 2 passes behind")
+            state_now = page.evaluate("JSON.parse(localStorage.getItem('crg.game.v1'))")
+            assert state_now["outcome"]["reason"] == "passes", state_now["outcome"]
+            assert [p["skipsUsed"] for p in state_now["players"]] == [2, 0]
+            check("falling two clear passes behind ends the game, and says why")
+            page.screenshot(path=str(shots / "17-pass-loss.png"), full_page=True)
+
             # --- skips run out ---
             page.evaluate(
                 """async () => {
@@ -346,7 +426,7 @@ def main() -> int:
             )
             page.reload()
             page.get_by_role("button", name="Resume").click()
-            no_skips = page.get_by_role("button", name="No skips left")
+            no_skips = page.get_by_role("button", name="No passes left")
             expect(no_skips).to_be_visible()
             expect(no_skips).to_be_disabled()
             check("a player with no skips left cannot give up a turn")

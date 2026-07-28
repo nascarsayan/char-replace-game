@@ -21,10 +21,12 @@ not online at the same time.
    **27 cards** in total.
 5. The wildcard lets you replay one letter you have already spent. The result
    still has to be a real word. You get one, ever.
-6. **Do not know a word?** Give up the turn. A bot plays one for you, using a
-   letter you still hold — and that letter is struck off **both** racks, which is
-   what makes it cost something. You get 5 of these per game.
-7. You lose when you have no legal move at all.
+6. **Do not know a word?** Pass. A bot plays one for you, using a letter one of
+   you still holds — and that letter is struck off **both** racks, which is what
+   makes it cost something. You get 5 passes per game.
+7. Passing hands a point to your opponent. Go **2 clear passes behind** and you
+   lose, however many words are left.
+8. You also lose if no word at all is left to you, wildcard included.
 
 Both racks are visible at all times: knowing which letters your opponent has
 burned, and whether they still hold their wildcard, is the game.
@@ -34,29 +36,35 @@ Every word played shows its meaning, on the board and in the move list — with 
 
 Keyboard: `1`–`4` or `←`/`→` pick a slot, a letter key plays it, `Esc` clears.
 
-### Giving up a turn
+### Passing
 
-A skip is for not knowing a word, not for being out of cards:
+Passing is for not knowing a word, and it costs you the initiative:
 
-- The bot plays a letter **you still hold** — never a wildcard, yours or anyone's.
-  It takes the first such word in slot-then-letter order, and is deliberately
-  deterministic: share links and live peers replay a skip rather than transmitting
-  what the bot chose, so both sides must compute the same word.
-- The letter is struck off **both** racks — always yours, and your opponent's too
-  if they still held it. If they had already spent it, it simply stays spent; no
-  wildcard is ever touched to make room.
-- Only the player who gave up spends a skip. 5 each.
-- Because the bot needs a spare letter of yours, **a skip cannot rescue you when
-  you have none**. That case is what the wildcard is for.
+- The bot plays a letter **either of you still holds** — never a wildcard, yours or
+  anyone's. It takes the first such word in slot-then-letter order, and the choice
+  is recorded in the game rather than recomputed, so a share link or a live peer
+  replays exactly the word that was played.
+- Letting the bot reach into your opponent's rack is what makes a pass possible
+  when you have nothing of your own left, which is precisely when you need it.
+- The letter is struck off **both** racks, wherever it was still held. If one of you
+  had already spent it, it simply stays spent; no wildcard is touched to make room.
+- Only the player who passed spends a pass. 5 each.
 
-### When only the wildcard can move
+### Passes decide games
 
-Once every letter that still fits is one you have spent, the board says so plainly
-and the skip button explains why it is unavailable. Your ★ wildcard is the way on
-— it replays one spent letter, and the cards that qualify are the dashed ones.
+Each pass hands a point to your opponent, and **2 clear passes behind loses**,
+however many words are still on the board. Trading passes one for one keeps you
+level. The board shows the score as soon as it is not level, and warns when
+somebody is one pass from winning.
 
-Stuck for ideas in any position, **Hint** shows a playable move and tells you if it
-would cost your wildcard. Asking again offers a different one.
+### Knowing how much room is left
+
+The board says **how many words you can play without your wildcard** — the count,
+not the words. At zero it says so instead, and your ★ wildcard is the way on: it
+replays one spent letter, and the cards that qualify are the dashed ones.
+
+**Hint** shows an actual playable move and tells you if it would cost your
+wildcard. Asking again offers a different one.
 
 ## Playing live
 
@@ -176,18 +184,23 @@ Links carry a format version, currently 4, and **every** older one is still read
 Each version's skipped turns are replayed with the rules that were in force when
 they were recorded:
 
-| Version | Skipped turns |
+| Version | Passed turns |
 | --- | --- |
 | 1 | did not exist yet |
-| 2 | the bot ignored rack limits, and a skip could rescue a player with no move |
-| 3 | the bot had to use a letter the giver still held |
-| 4 | the skip records the letter it used, so nothing is recomputed |
+| 2 | the bot ignored rack limits, and a pass could rescue a player with no move |
+| 3 | the bot had to use a letter the passer still held |
+| 4 | the pass records the letter it used, so nothing is recomputed |
+| 5 | the bot may use a letter either player holds, and passes decide games |
 
 Version 4 exists to end that pattern. Recomputing the bot's choice meant that any
 change to how it chooses stranded games already in progress — which is exactly
-what happened when version 3 landed. Writing the letter down costs nothing (an
-uppercase letter marks a skip, so tokens stay two characters wide) and makes a
-recorded game replay the same way for good.
+what happened when version 3 landed, and again at version 5. Writing the letter
+down costs nothing (an uppercase letter marks a pass, so tokens stay two characters
+wide) and makes a recorded game replay the same way for good.
+
+Versions before 5 also predate passes deciding games, so they are replayed without
+that rule and meet it once at the end. A game that had already fallen two passes
+behind therefore comes back finished, because under today's rules it was.
 
 A version 2 game whose later moves *only* happened because a skip rescued a stuck
 player is replayed under that old rule, then handed to the current one, which will
