@@ -310,17 +310,26 @@ export function Board({
         </p>
       </section>
 
-      ${over || locked
+      <!--
+        Always reachable while the game is live, even when it is not your move:
+        being unable to leave a board you are only watching is a trap. The
+        turn-specific controls are what get withheld.
+      -->
+      ${over
         ? null
         : html`<div class="board-actions">
-            <button
-              type="button"
-              class="secondary outline"
-              onClick=${() => setHintIndex((n) => (n === null ? 0 : n + 1))}
-            >
-              ${hintIndex === null ? 'Hint' : 'Another hint'}
-            </button>
-            ${confirmSkip
+            ${locked
+              ? null
+              : html`<button
+                  type="button"
+                  class="secondary outline"
+                  onClick=${() => setHintIndex((n) => (n === null ? 0 : n + 1))}
+                >
+                  ${hintIndex === null ? 'Hint' : 'Another hint'}
+                </button>`}
+            ${locked
+              ? null
+              : confirmSkip
               ? html`<span class="confirm" role="group" aria-label="Confirm giving up the turn">
                   <button
                     type="button"
@@ -344,7 +353,9 @@ export function Board({
                 >
                   ${skipLabel}
                 </button>`}
-            ${confirmResign
+            ${locked
+              ? null
+              : confirmResign
               ? html`<span class="confirm" role="group" aria-label="Confirm resignation">
                   <button
                     type="button"

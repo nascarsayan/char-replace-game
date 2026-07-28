@@ -1,4 +1,5 @@
-import { html, useState } from '../../vendor/preact-standalone.module.js';
+import { html, useEffect, useState } from '../../vendor/preact-standalone.module.js';
+import * as identity from '../identity.js';
 import { addUser, deleteUser, findUser, listUsers, normaliseName } from '../store.js';
 import { Rules } from './Rules.js';
 import { UserPicker } from './UserPicker.js';
@@ -12,10 +13,36 @@ function describeSavedGame(game) {
 }
 
 /** Opponent selection. Both players share this screen and keyboard — hotseat. */
-export function Lobby({ me, savedGame, onStart, onPlayLive, onResume, onDiscard, onSignOut }) {
+export function Lobby({
+  me,
+  savedGame,
+  onStart,
+  onPlayLive,
+  onResumeRoom,
+  onResume,
+  onDiscard,
+  onSignOut,
+}) {
   const [users, setUsers] = useState(listUsers);
   const [opponent, setOpponent] = useState('');
   const [error, setError] = useState('');
+  // Unfinished relayed games this identity is in, wherever they were started.
+  const [rooms, setRooms] = useState(null);
+
+  useEffect(() => {
+    if (!identity.identitiesAreShared()) {
+      setRooms([]);
+      return;
+    }
+    let live = true;
+    identity
+      .listResumableGames(me)
+      .then((found) => live && setRooms(found))
+      .catch(() => live && setRooms([]));
+    return () => {
+      live = false;
+    };
+  }, [me]);
 
   function start(name) {
     const clean = normaliseName(name);
@@ -45,9 +72,40 @@ export function Lobby({ me, savedGame, onStart, onPlayLive, onResume, onDiscard,
         <button type="button" class="secondary outline" onClick=${onSignOut}>Switch player</button>
       </p>
 
+      ${identity.identitiesAreShared()
+        ? html`<section class="resume" aria-label="Your unfinished games">
+            <h3>Pick up where you left off</h3>
+            ${rooms === null
+              ? html`<p class="muted" aria-live="polite">Looking for your games…</p>`
+              : rooms.length === 0
+                ? html`<p class="muted">
+                    No unfinished games. Start a live one and it will wait for you here, on any
+                    device.
+                  </p>`
+                : html`<ul class="game-list" role="list">
+                    ${rooms.map(
+                      (room) => html`<li>
+                        <button
+                          type="button"
+                          class="big game-pick"
+                          onClick=${() => onResumeRoom(room.code)}
+                        >
+                          <span class="game-word">${room.word.toUpperCase()}</span>
+                          <span class="game-meta"
+                            >${`vs ${room.opponent} · ${room.plies} ${
+                              room.plies === 1 ? 'move' : 'moves'
+                            } · ${room.yourTurn ? 'your turn' : `waiting for ${room.onTurn}`} · room ${room.code}`}</span
+                          >
+                        </button>
+                      </li>`,
+                    )}
+                  </ul>`}
+          </section>`
+        : null}
+
       ${savedGame
         ? html`<div class="resume">
-            <h3>Unfinished game</h3>
+            <h3>Unfinished game on this device</h3>
             <p>${describeSavedGame(savedGame)}</p>
             <button type="button" class="big" onClick=${onResume}>Resume</button>
             <button type="button" class="secondary" onClick=${onDiscard}>Discard</button>
