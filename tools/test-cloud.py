@@ -338,37 +338,57 @@ def main() -> int:
             "[...document.querySelectorAll('button.tile span')].map(s=>s.textContent).join('')"
         ).lower()
 
-    LEGAL_MOVE_JS = """async (played) => {
-        const { WORD_SET } = await import('./src/words.js');
+    # Used words are read from the move list and the opening word rather than
+    # tracked here: a relayed game gains words from the other device and from the
+    # bot, so any list kept on this side drifts and starts proposing replays.
+    def pick_move(pg):
+        """A legal move for the player on turn, from what the board actually shows."""
+        view = pg.evaluate(LEGAL_MOVE_JS)
+        used, word = set(view["used"]), view["word"]
+        spent, wildcard_left = set(view["spent"]), view["wildcardLeft"]
+        for pos in range(4):
+            for letter in "abcdefghijklmnopqrstuvwxyz":
+                if letter == word[pos]:
+                    continue
+                candidate = word[:pos] + letter + word[pos + 1 :]
+                if candidate in used or not pg.evaluate(
+                    "async (w) => (await import('./src/words.js')).WORD_SET.has(w)", candidate
+                ):
+                    continue
+                if letter in spent and not wildcard_left:
+                    continue
+                return {
+                    "pos": pos,
+                    "letter": letter,
+                    "word": candidate,
+                    "needsWildcard": letter in spent,
+                }
+        return None
+
+    LEGAL_MOVE_JS = """() => {
+        const used = new Set(
+          [...document.querySelectorAll('.move-list li strong'), document.querySelector('.seed-word strong')]
+            .filter(Boolean)
+            .map((el) => el.textContent.trim().toLowerCase()),
+        );
         const word = [...document.querySelectorAll('button.tile span')]
-          .map(s => s.textContent).join('').toLowerCase();
+          .map((s) => s.textContent).join('').toLowerCase();
+        used.add(word);
         const mine = document.querySelector('.rack[data-you="true"]');
         const spent = new Set([...mine.querySelectorAll('.card')]
-          .filter(c => c.dataset.state !== 'ready')
-          .map(c => c.textContent.trim().toLowerCase()));
-        const wildcardLeft = mine.querySelector('.wildcard-state').textContent.includes('★');
-        const used = new Set(played);
-        for (let pos = 0; pos < 4; pos++) {
-          for (const letter of 'abcdefghijklmnopqrstuvwxyz') {
-            if (letter === word[pos]) continue;
-            const next = word.slice(0, pos) + letter + word.slice(pos + 1);
-            if (!WORD_SET.has(next) || used.has(next)) continue;
-            if (spent.has(letter) && !wildcardLeft) continue;
-            return { pos, letter, word: next, needsWildcard: spent.has(letter) };
-          }
-        }
-        return null;
+          .filter((c) => c.dataset.state !== 'ready')
+          .map((c) => c.textContent.trim().toLowerCase()));
+        const wildcardLeft = mine.querySelector('.wildcard-state').textContent.includes('\u2605');
+        return { used: [...used], word, spent: [...spent], wildcardLeft };
     }"""
 
-    def play(pg, played: list[str]) -> str:
-        move = pg.evaluate(LEGAL_MOVE_JS, played)
+    def play(pg) -> str:
+        move = pick_move(pg)
         assert move is not None, f"no legal move from {board_word(pg)}"
         pg.locator("button.tile").nth(move["pos"]).click()
         pg.locator(f'button.card[aria-label^="Play {move["letter"]},"]').click()
         if move["needsWildcard"]:
-            pg.get_by_role(
-                "button", name=f"Spend wildcard on {move['letter'].upper()}"
-            ).click()
+            pg.get_by_role("button", name=f"Spend wildcard on {move['letter'].upper()}").click()
         return move["word"]
 
     try:
@@ -433,15 +453,15 @@ def main() -> int:
             check("only the player on turn can act")
 
             # --- moves relay in both directions ---
-            played = [board_word(host)]
-            played.append(play(host, played))
+            opening = board_word(host)
+            latest = play(host)
             expect(guest.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
-            assert board_word(guest) == played[-1], (board_word(guest), played)
-            check(f"the host's move ({played[0]} -> {played[-1]}) reaches the guest")
+            assert board_word(guest) == latest, (board_word(guest), latest)
+            check(f"the host's move ({opening} -> {latest}) reaches the guest")
 
-            played.append(play(guest, played))
+            latest = play(guest)
             expect(host.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
-            assert board_word(host) == played[-1]
+            assert board_word(host) == latest
             expect(host.locator(".move-list li")).to_have_count(2)
             check("the guest's reply reaches the host, and both histories match")
 
@@ -529,15 +549,15 @@ def main() -> int:
 
             # Bob, on the other device, plays: the resumed device must see it.
             expect(rejoin.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
-            played.append(play(rejoin, played))
+            latest = play(rejoin)
             expect(fresh.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
-            assert board_word(fresh) == played[-1], (board_word(fresh), played[-1])
+            assert board_word(fresh) == latest, (board_word(fresh), latest)
             check("a move from the other device reaches the resumed one")
 
             # And the resumed device can really move, not just watch.
-            played.append(play(fresh, played))
+            latest = play(fresh)
             expect(rejoin.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
-            assert board_word(rejoin) == played[-1]
+            assert board_word(rejoin) == latest
             check("the resumed device holds a real seat and can move")
 
             # --- deleting an identity removes it everywhere ---

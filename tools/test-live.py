@@ -98,31 +98,51 @@ def main() -> int:
     # A live game keeps its state in the component, deliberately: it is in neither
     # localStorage nor the URL. So a move is worked out from what is actually
     # rendered, which doubles as a check that the DOM reflects the real position.
-    LEGAL_MOVE_JS = """async (played) => {
-        const { WORD_SET } = await import('./src/words.js');
+    # Used words are read from the move list and the opening word rather than
+    # tracked here: a relayed game gains words from the other device and from the
+    # bot, so any list kept on this side drifts and starts proposing replays.
+    def pick_move(pg):
+        """A legal move for the player on turn, from what the board actually shows."""
+        view = pg.evaluate(LEGAL_MOVE_JS)
+        used, word = set(view["used"]), view["word"]
+        spent, wildcard_left = set(view["spent"]), view["wildcardLeft"]
+        for pos in range(4):
+            for letter in "abcdefghijklmnopqrstuvwxyz":
+                if letter == word[pos]:
+                    continue
+                candidate = word[:pos] + letter + word[pos + 1 :]
+                if candidate in used or not pg.evaluate(
+                    "async (w) => (await import('./src/words.js')).WORD_SET.has(w)", candidate
+                ):
+                    continue
+                if letter in spent and not wildcard_left:
+                    continue
+                return {
+                    "pos": pos,
+                    "letter": letter,
+                    "word": candidate,
+                    "needsWildcard": letter in spent,
+                }
+        return None
+
+    LEGAL_MOVE_JS = """() => {
+        const used = new Set(
+          [...document.querySelectorAll('.move-list li strong'), document.querySelector('.seed-word strong')]
+            .filter(Boolean)
+            .map((el) => el.textContent.trim().toLowerCase()),
+        );
         const word = [...document.querySelectorAll('button.tile span')]
-          .map(s => s.textContent).join('').toLowerCase();
+          .map((s) => s.textContent).join('').toLowerCase();
+        used.add(word);
         const mine = document.querySelector('.rack[data-you="true"]');
         const spent = new Set([...mine.querySelectorAll('.card')]
-          .filter(c => c.dataset.state !== 'ready')
-          .map(c => c.textContent.trim().toLowerCase()));
-        const wildcardLeft = mine.querySelector('.wildcard-state').textContent.includes('★');
-        const used = new Set(played);
-        for (let pos = 0; pos < 4; pos++) {
-          for (const letter of 'abcdefghijklmnopqrstuvwxyz') {
-            if (letter === word[pos]) continue;
-            const next = word.slice(0, pos) + letter + word.slice(pos + 1);
-            if (!WORD_SET.has(next) || used.has(next)) continue;
-            if (spent.has(letter) && !wildcardLeft) continue;
-            return { pos, letter, word: next, needsWildcard: spent.has(letter) };
-          }
-        }
-        return null;
+          .filter((c) => c.dataset.state !== 'ready')
+          .map((c) => c.textContent.trim().toLowerCase()));
+        const wildcardLeft = mine.querySelector('.wildcard-state').textContent.includes('\u2605');
+        return { used: [...used], word, spent: [...spent], wildcardLeft };
     }"""
 
-    def legal_move(pg, played: list[str]):
-        """A playable move, or None when the position has genuinely dead-ended."""
-        return pg.evaluate(LEGAL_MOVE_JS, played)
+
 
     def play(pg, move):
         pg.locator("button.tile").nth(move["pos"]).click()
@@ -208,8 +228,7 @@ def main() -> int:
 
             # --- a move made on one browser appears on the other ---
             word_before = board_word(host)
-            played = [word_before]
-            move = legal_move(host, played)
+            move = pick_move(host)
             if move is None:
                 print(
                     f"\nSKIPPED: the random opening word {word_before.upper()} has no "
@@ -218,7 +237,6 @@ def main() -> int:
                 )
                 return 1
             play(host, move)
-            played.append(move["word"])
             expect(guest.get_by_role("status").first).to_contain_text("Your turn.", timeout=30000)
             word_after = board_word(guest)
             assert word_after == move["word"], (word_after, move)
@@ -248,10 +266,9 @@ def main() -> int:
             check("both sides derive the same spent cards from the moves alone")
 
             # --- and back the other way ---
-            reply = legal_move(guest, played)
+            reply = pick_move(guest)
             assert reply is not None, f"guest has no reply from {board_word(guest)}"
             play(guest, reply)
-            played.append(reply["word"])
             expect(host.get_by_role("status").first).to_contain_text("Your turn.", timeout=30000)
             assert board_word(host) == reply["word"], (board_word(host), reply)
             expect(host.locator(".move-list li")).to_have_count(2)

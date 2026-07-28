@@ -1,6 +1,6 @@
 import { html, useEffect, useState } from '../../vendor/preact-standalone.module.js';
 import * as identity from '../identity.js';
-import { addUser, deleteUser, findUser, listUsers, normaliseName } from '../store.js';
+import { listUsers, normaliseName } from '../store.js';
 import { Rules } from './Rules.js';
 import { UserPicker } from './UserPicker.js';
 
@@ -23,7 +23,9 @@ export function Lobby({
   onDiscard,
   onSignOut,
 }) {
-  const [users, setUsers] = useState(listUsers);
+  const [users, setUsers] = useState(() =>
+    identity.identitiesAreShared() ? null : listUsers(),
+  );
   const [opponent, setOpponent] = useState('');
   const [error, setError] = useState('');
   // Unfinished relayed games this identity is in, wherever they were started.
@@ -34,6 +36,10 @@ export function Lobby({
       setRooms([]);
       return;
     }
+    identity
+      .listUsers()
+      .then(setUsers)
+      .catch(() => setUsers([]));
     let live = true;
     identity
       .listResumableGames(me)
@@ -44,24 +50,32 @@ export function Lobby({
     };
   }, [me]);
 
-  function start(name) {
+  async function start(name) {
     const clean = normaliseName(name);
     if (!clean) return setError('Name the opponent first.');
     if (clean.toLowerCase() === me.toLowerCase()) return setError('Pick someone other than you.');
-    if (!findUser(clean)) {
-      try {
-        addUser(clean);
-        setUsers(listUsers());
-      } catch (err) {
-        return setError(err.message);
-      }
+
+    const known = (users || []).find(
+      (user) => user.name.toLowerCase() === clean.toLowerCase(),
+    );
+    if (known) return onStart(me, known.name);
+
+    try {
+      const created = await identity.createUser(clean);
+      setUsers(
+        identity.identitiesAreShared() ? await identity.listUsers() : listUsers(),
+      );
+      return onStart(me, created);
+    } catch (err) {
+      return setError(err.message);
     }
-    onStart(me, findUser(clean).name);
   }
 
-  function remove(userName) {
-    deleteUser(userName);
-    setUsers(listUsers());
+  async function remove(userName) {
+    await identity.deleteUser(userName);
+    setUsers(
+      identity.identitiesAreShared() ? await identity.listUsers().catch(() => []) : listUsers(),
+    );
   }
 
   return html`
@@ -114,8 +128,9 @@ export function Lobby({
 
       <h2>Play someone else</h2>
       <p>
-        A live game connects your two browsers directly, so moves appear as they happen. You both
-        need to be online.
+        ${identity.identitiesAreShared()
+          ? 'A live game is relayed, so moves appear as they happen and the room waits for you if you close the tab.'
+          : 'A live game connects your two browsers directly, so moves appear as they happen. You both need to be online.'}
       </p>
       <button type="button" class="big" onClick=${onPlayLive}>Play live</button>
 
@@ -150,7 +165,7 @@ export function Lobby({
 
       <h3>Or pick a saved player</h3>
       <${UserPicker}
-        users=${users}
+        users=${users || []}
         pickLabel="Play against"
         onPick=${start}
         onDelete=${remove}

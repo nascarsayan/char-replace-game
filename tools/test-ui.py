@@ -209,9 +209,27 @@ def main() -> int:
                 assert "no definition bundled" in definition, definition
                 check(f"a word with no bundled definition says so ({board_now.upper()})")
 
-            glossed = page.locator(".move-list li .move-gloss")
-            assert glossed.count() >= 1, "played words should carry their meaning in the history"
-            check(f"{glossed.count()} played word(s) show their meaning in the move list")
+            # Every played word with a bundled definition must show it, and one
+            # without must not invent anything. Asserting "at least one gloss"
+            # would be flaky, since a third of the word list has no definition.
+            gloss_report = page.evaluate(
+                """async () => {
+                    const { define } = await import('./src/definitions.js');
+                    return [...document.querySelectorAll('.move-list li')].map((li) => ({
+                      word: li.querySelector('strong').textContent.trim(),
+                      shown: Boolean(li.querySelector('.move-gloss')),
+                      known: Boolean(define(li.querySelector('strong').textContent.trim())),
+                    }));
+                }"""
+            )
+            assert gloss_report, "the move list should not be empty here"
+            for entry in gloss_report:
+                assert entry["shown"] == entry["known"], entry
+            known = sum(1 for entry in gloss_report if entry["known"])
+            check(
+                f"each played word shows its meaning when there is one "
+                f"({known} of {len(gloss_report)} in the list)"
+            )
 
             # --- giving up a turn: the bot plays and both racks lose the letter ---
             page.evaluate(
