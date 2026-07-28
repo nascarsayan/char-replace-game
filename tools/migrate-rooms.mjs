@@ -4,6 +4,7 @@
 //   node tools/migrate-rooms.mjs                 # report only, changes nothing
 //   node tools/migrate-rooms.mjs --apply         # write the upgrades
 //   node tools/migrate-rooms.mjs --room 7F8K49   # just one room
+//   node tools/migrate-rooms.mjs --index --apply  # list existing rooms under their players
 //
 // Upgrading is OPTIONAL: the app reads older skip-free rooms directly, so a room
 // left alone still plays. Its real use is the report — in particular spotting a
@@ -23,16 +24,20 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { request } from 'node:https';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decodeGame } from '../src/link.js';
+import { LINK_VERSION, decodeGame } from '../src/link.js';
+import { userKey } from '../src/cloud.js';
 import { DATABASE_URL } from '../src/cloud-config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const BACKUPS = join(ROOT, '.local', 'room-backups');
-const CURRENT_VERSION = 3;
+// Read from link.js rather than repeated here: a stale copy of this number would
+// make the tool "upgrade" current rooms by rewriting them to an older format.
+const CURRENT_VERSION = LINK_VERSION;
 const SKIP_TOKEN = '0-';
 
 const args = process.argv.slice(2);
 const apply = args.includes('--apply');
+const index = args.includes('--index');
 const onlyRoom = args.includes('--room') ? args[args.indexOf('--room') + 1] : null;
 
 function http(method, url, body) {
@@ -182,3 +187,40 @@ console.log(
   `\n${apply ? 'Upgraded' : 'Upgradeable'}: ${apply ? upgraded : codes.length - blocked}. ` +
     `Left alone: ${blocked}.`,
 );
+
+// Rooms that predate per-player game lists are invisible in the lobby until they
+// are indexed, which is what makes "sign in and resume" find them.
+if (index) {
+  console.log('\nIndexing rooms under their players:');
+  for (const code of codes) {
+    const room = await http('GET', `${base}/rooms/${code}.json`);
+    if (!room || typeof room.state !== 'string') continue;
+
+    let names;
+    try {
+      names = decodeGame(room.state).players.map((player) => player.name);
+    } catch (err) {
+      console.log(`  ${code}: cannot read, skipping (${err.message})`);
+      continue;
+    }
+
+    for (const name of [...new Set(names)]) {
+      const key = userKey(name);
+      const existing = await http('GET', `${base}/users/${key}/name.json`);
+      const action = existing ? 'linked to' : 'created and linked to';
+      if (!apply) {
+        console.log(`  ${code}: would be ${action} ${name}`);
+        continue;
+      }
+      if (!existing) {
+        await http('PATCH', `${base}/users/${key}.json`, {
+          name,
+          lastSeen: { '.sv': 'timestamp' },
+        });
+      }
+      await http('PATCH', `${base}/users/${key}/rooms.json`, { [code]: true });
+      console.log(`  ${code}: ${action} ${name}`);
+    }
+  }
+  if (!apply) console.log('  (dry run — pass --apply to write)');
+}

@@ -110,11 +110,23 @@ rooms and keeps entries small:
     "rooms": {
       "$room": {
         ".read": "$room.length == 6",
-        ".write": "$room.length == 6 && newData.hasChildren()",
+        ".write": "$room.length == 6",
         "state": { ".validate": "newData.isString() && newData.val().length < 4096" },
         "host": { ".validate": "newData.isString() && newData.val().length <= 24" },
         "guest": { ".validate": "newData.isString() && newData.val().length <= 24" },
         "updatedAt": { ".validate": "newData.isNumber()" },
+        "$other": { ".validate": false }
+      }
+    },
+    "users": {
+      ".read": true,
+      "$user": {
+        ".write": true,
+        "name": { ".validate": "newData.isString() && newData.val().length <= 24" },
+        "lastSeen": { ".validate": "newData.isNumber()" },
+        "rooms": {
+          "$room": { ".validate": "$room.length == 6 && newData.isBoolean()" }
+        },
         "$other": { ".validate": false }
       }
     }
@@ -123,9 +135,10 @@ rooms and keeps entries small:
 ```
 
 Be clear-eyed about what that does and does not buy you: it stops anything being
-written outside `/rooms`, caps the sizes, and rejects unknown fields — but rooms
-are still readable and writable by anyone who knows or guesses a six-character
-code. That is obscurity, not authentication. A position pushed into a room is
+written outside `/rooms` and `/users`, caps the sizes, and rejects unknown fields —
+but rooms are still readable and writable by anyone who knows or guesses a
+six-character code, and the player list is readable and editable by anyone at all.
+That is obscurity, not authentication. A position pushed into a room is
 still replayed through the rules before it is shown, so a tampered one is rejected
 rather than trusted, but nothing stops a stranger who guesses your code from
 joining. For a word game among friends that is a reasonable trade; if it ever
@@ -214,6 +227,7 @@ modules, which browsers only load over http(s).
 | `src/words.js` | Generated dictionary: the 5,454 four-letter SOWPODS words. |
 | `src/store.js` | localStorage: users, session, saved local game. |
 | `src/definitions.js` | Lazily fetches the definition file; degrades quietly if it fails. |
+| `src/identity.js` | Who is playing and which games they are in — database-backed, or localStorage without one. |
 | `src/link.js` | Encodes a game into a shareable URL fragment, and validates one on the way back in. |
 | `src/cloud.js` | Relayed live games: Firebase Realtime Database over plain `fetch` + `EventSource`, no SDK. |
 | `src/cloud-config.js` | Where the database URL goes. Empty by default. |
@@ -227,13 +241,25 @@ modules, which browsers only load over http(s).
 State lives in one plain object that round-trips through `JSON.stringify`, which
 is why an unfinished game survives a reload.
 
-## Accounts, and what the password is not
+## Players, and what the password is not
 
 The `chargame` password is checked in the browser and is sitting right there in
 `src/store.js`. It keeps passers-by from wandering into your game; it is not
-access control, and the page says so. Players are stored per-browser in
-localStorage, anyone can delete any player, and there are no permissions —
-deliberately, for a party game.
+access control, and the page says so.
+
+Players are just names, and a name is unique (case-insensitively). With a database
+configured they are saved alongside the games, which is what lets you sign in as an
+existing name on a device that has never played and pick up a game you left
+half-finished — the lobby lists your unfinished games, so you need neither the room
+code nor the link. Without a database they fall back to this browser's
+localStorage, and cannot follow you anywhere.
+
+There are no per-player passwords: anyone past the page password can sign in as any
+name, and anyone can delete any player. That is deliberate for a party game, and
+the sign-in screen says so rather than implying otherwise.
+
+Records (W/L) are counted from the games themselves rather than tallied as they
+finish, so two devices writing at once cannot double-count.
 
 ## Tests
 

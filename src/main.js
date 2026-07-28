@@ -111,6 +111,14 @@ function App() {
     setLive({ role: 'host', roomCode });
   }
 
+  /** Picks up a game this identity is already part of; the seat comes from it. */
+  function resumeLiveGame(roomCode) {
+    window.history.replaceState(null, '', `#r=${roomCode}`);
+    setBrowsingLive(false);
+    setInvited(null);
+    setLive({ role: 'resume', roomCode });
+  }
+
   function joinLiveGame(roomCode) {
     window.history.replaceState(null, '', `#r=${roomCode}`);
     setBrowsingLive(false);
@@ -187,6 +195,7 @@ function App() {
       savedGame=${game && !game.outcome ? game : null}
       onStart=${startGame}
       onPlayLive=${() => setBrowsingLive(true)}
+      onResumeRoom=${(roomCode) => resumeLiveGame(roomCode)}
       onResume=${() => setPlaying(true)}
       onDiscard=${() => {
         store.clearGame();

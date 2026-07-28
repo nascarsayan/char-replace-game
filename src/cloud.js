@@ -13,7 +13,110 @@ import { decodeGame, encodeGame } from './link.js';
 
 export const cloudConfigured = () => Boolean(DATABASE_URL);
 
-const roomUrl = (roomCode) => `${DATABASE_URL.replace(/\/+$/, '')}/rooms/${roomCode}.json`;
+const base = () => DATABASE_URL.replace(/\/+$/, '');
+const roomUrl = (roomCode) => `${base()}/rooms/${roomCode}.json`;
+
+/**
+ * Firebase keys cannot contain . $ # [ ] / or control characters, so a name is
+ * percent-encoded to make one. Lowercasing is what makes names unique
+ * case-insensitively: "Sayan" and "sayan" resolve to the same key.
+ */
+export const userKey = (name) =>
+  // encodeURIComponent leaves "." alone, and Firebase rejects it in a key.
+  encodeURIComponent(String(name).trim().toLowerCase()).replace(/\./g, '%2E');
+
+async function send(method, url, body) {
+  const response = await fetch(url, {
+    method,
+    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Database said HTTP ${response.status}. ${detail}`.trim());
+  }
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
+}
+
+/** Every saved identity, newest activity first. */
+export async function fetchUsers() {
+  const users = (await send('GET', `${base()}/users.json`)) || {};
+  return Object.entries(users)
+    .filter(([, value]) => value && typeof value.name === 'string')
+    .map(([key, value]) => ({
+      key,
+      name: value.name,
+      lastSeen: value.lastSeen || 0,
+      rooms: value.rooms ? Object.keys(value.rooms) : [],
+    }))
+    .sort((a, b) => b.lastSeen - a.lastSeen);
+}
+
+/** Creates an identity, refusing a name that is taken. */
+export async function createUser(name) {
+  const key = userKey(name);
+  const existing = await send('GET', `${base()}/users/${key}/name.json`);
+  if (existing) throw new Error(`"${existing}" is already taken.`);
+  await send('PUT', `${base()}/users/${key}.json`, {
+    name: String(name).trim(),
+    lastSeen: { '.sv': 'timestamp' },
+  });
+}
+
+export async function deleteUser(name) {
+  await send('DELETE', `${base()}/users/${userKey(name)}.json`);
+}
+
+export async function touchUser(name) {
+  await send('PATCH', `${base()}/users/${userKey(name)}.json`, {
+    lastSeen: { '.sv': 'timestamp' },
+  });
+}
+
+/** Notes that this identity is in this room, so it can be found again later. */
+export async function rememberRoom(name, roomCode) {
+  await send('PATCH', `${base()}/users/${userKey(name)}/rooms.json`, { [roomCode]: true });
+}
+
+export async function forgetRoom(name, roomCode) {
+  await send('DELETE', `${base()}/users/${userKey(name)}/rooms/${roomCode}.json`);
+}
+
+/**
+ * The games an identity is in, described enough to choose between them. Rooms
+ * that have since vanished are dropped from the index rather than listed.
+ */
+export async function fetchUserGames(name) {
+  const codes = Object.keys((await send('GET', `${base()}/users/${userKey(name)}/rooms.json`)) || {});
+  const summaries = await Promise.all(
+    codes.map(async (code) => {
+      const room = await send('GET', roomUrl(code)).catch(() => null);
+      if (!room || typeof room.state !== 'string') {
+        await forgetRoom(name, code).catch(() => {});
+        return null;
+      }
+      try {
+        const game = decodeGame(room.state);
+        const you = game.players.findIndex((player) => player.name === name);
+        return {
+          code,
+          word: game.word,
+          plies: game.history.length,
+          updatedAt: room.updatedAt || 0,
+          opponent: game.players[you === 0 ? 1 : 0].name,
+          yourTurn: you !== -1 && game.turn === you,
+          onTurn: game.players[game.turn].name,
+          outcome: game.outcome,
+          winner: game.outcome ? game.players[game.outcome.winner].name : null,
+        };
+      } catch (err) {
+        return { code, unreadable: err.message, updatedAt: room.updatedAt || 0 };
+      }
+    }),
+  );
+  return summaries.filter(Boolean).sort((a, b) => b.updatedAt - a.updatedAt);
+}
 
 /**
  * Applies one streaming event to our local copy of the room.

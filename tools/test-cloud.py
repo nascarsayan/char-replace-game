@@ -30,9 +30,22 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PASSWORD = "chargame"
 
 rooms: dict[str, dict] = {}
+users: dict[str, dict] = {}
 subscribers: dict[str, list[queue.Queue]] = {}
 lock = threading.Lock()
 writes: list[dict] = []
+
+
+def walk(root: dict, segments: list[str], create: bool = False):
+    """(container, key) for a path, or (None, None) when it is absent."""
+    node = root
+    for segment in segments[:-1]:
+        if segment not in node or not isinstance(node[segment], dict):
+            if not create:
+                return None, None
+            node[segment] = {}
+        node = node[segment]
+    return node, segments[-1]
 
 
 def publish(room_code: str, payload: dict, event: str) -> None:
@@ -61,10 +74,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _room_code(self) -> str | None:
         if not self.path.startswith("/db/rooms/"):
             return None
-        tail = self.path[len("/db/rooms/") :]
-        if not tail.endswith(".json"):
+        tail = self.path[len("/db/rooms/") :].split("?")[0]
+        if not tail.endswith(".json") or "/" in tail[: -len(".json")]:
             return None
         return tail[: -len(".json")]
+
+    def _segments(self) -> list[str] | None:
+        """Path segments under /db, e.g. /db/users/sayan/rooms.json -> [...]."""
+        if not self.path.startswith("/db/"):
+            return None
+        tail = self.path[len("/db/") :].split("?")[0]
+        if not tail.endswith(".json"):
+            return None
+        tail = tail[: -len(".json")]
+        return [part for part in tail.split("/") if part]
+
+    def _tree(self, segments: list[str]):
+        return users if segments and segments[0] == "users" else rooms
+
+    def _relative(self, segments: list[str]) -> list[str]:
+        return segments[1:] if segments and segments[0] in ("users", "rooms") else segments
 
     def _send_json(self, payload, status=200) -> None:
         body = json.dumps(payload).encode()
@@ -90,7 +119,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         room_code = self._room_code()
         if room_code is None:
-            super().do_GET()
+            segments = self._segments()
+            if segments is None:
+                super().do_GET()
+                return
+            relative = self._relative(segments)
+            with lock:
+                if not relative:
+                    self._send_json(self._tree(segments) or None)
+                    return
+                holder, key = walk(self._tree(segments), relative)
+                value = holder.get(key) if holder else None
+                self._send_json(value if value else None)
             return
 
         if "text/event-stream" not in (self.headers.get("Accept") or ""):
@@ -125,10 +165,61 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             with lock:
                 subscribers.get(room_code, []).remove(channel)
 
+    def _read_body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) or b"null"
+        return json.loads(raw)
+
+    def do_PUT(self) -> None:  # noqa: N802
+        segments = self._segments()
+        if segments is None:
+            self.send_error(404)
+            return
+        body = resolve_server_values(self._read_body())
+        writes.append({"method": "PUT", "path": "/".join(segments), "body": body})
+        relative = self._relative(segments)
+        with lock:
+            holder, key = walk(self._tree(segments), relative, create=True)
+            holder[key] = body
+            if segments[0] == "rooms" and len(relative) == 1:
+                publish(key, {"path": "/", "data": body}, "put")
+        self._send_json(body)
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        segments = self._segments()
+        if segments is None:
+            self.send_error(404)
+            return
+        writes.append({"method": "DELETE", "path": "/".join(segments)})
+        relative = self._relative(segments)
+        with lock:
+            holder, key = walk(self._tree(segments), relative)
+            if holder is not None:
+                holder.pop(key, None)
+            if segments[0] == "rooms" and len(relative) == 1:
+                publish(key, {"path": "/", "data": None}, "put")
+        self._send_json(None)
+
     def do_PATCH(self) -> None:  # noqa: N802
         room_code = self._room_code()
         if room_code is None:
-            self.send_error(404)
+            segments = self._segments()
+            if segments is None:
+                self.send_error(404)
+                return
+            body = self._read_body()
+            if not isinstance(body, dict):
+                self.send_error(400, "PATCH body must be an object")
+                return
+            writes.append({"method": "PATCH", "path": "/".join(segments), "body": body})
+            merged = {k: resolve_server_values(v) for k, v in body.items()}
+            relative = self._relative(segments)
+            with lock:
+                holder, key = walk(self._tree(segments), relative, create=True)
+                if not isinstance(holder.get(key), dict):
+                    holder[key] = {}
+                holder[key].update(merged)
+            self._send_json(merged)
             return
         length = int(self.headers.get("Content-Length") or 0)
         try:
@@ -140,7 +231,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.send_error(400, "PATCH body must be an object")
             return
 
-        writes.append(body)
+        writes.append({"method": "PATCH", "path": f"rooms/{room_code}", "body": body})
         merged = {key: resolve_server_values(value) for key, value in body.items()}
         with lock:
             room = rooms.setdefault(room_code, {})
@@ -219,13 +310,28 @@ def main() -> int:
         pg.on("pageerror", lambda e: problems.append(f"pageerror: {e}"))
 
     def sign_in(pg, name: str, url: str = base) -> None:
+        """Signs in, reusing the identity if it already exists.
+
+        With shared identities a name can only be created once, so a second
+        device has to continue as it rather than make it again.
+        """
         pg.goto(url)
         if pg.get_by_label("Password").count():
             pg.get_by_label("Password").fill(PASSWORD)
             pg.get_by_role("button", name="Unlock").click()
-        if pg.get_by_label("New player name").count():
-            pg.get_by_label("New player name").fill(name)
-            pg.get_by_role("button", name="Create and continue").click()
+        if not pg.get_by_label("New player name").count():
+            return
+        # The saved-player list arrives from the database, so wait for it before
+        # deciding whether this name has to be created.
+        loading = pg.get_by_text("Loading players…")
+        if loading.count():
+            loading.wait_for(state="detached", timeout=20000)
+        existing = pg.get_by_role("button", name=f"Continue as {name}")
+        if existing.count():
+            existing.click()
+            return
+        pg.get_by_label("New player name").fill(name)
+        pg.get_by_role("button", name="Create and continue").click()
 
     def board_word(pg) -> str:
         return pg.evaluate(
@@ -368,6 +474,87 @@ def main() -> int:
             expect(rejoin.locator(".move-list li")).to_have_count(history_before)
             check("a player who closes the tab can rejoin and find the game intact")
 
+            # ================================================================
+            # A completely fresh device: no localStorage, no link, no room code.
+            # Signing in as an existing name must find the game and resume it.
+            # ================================================================
+            ctx_fresh = browser.new_context(viewport={"width": 1280, "height": 1500})
+            fresh = ctx_fresh.new_page()
+            watch(fresh)
+            fresh.goto(base)
+            fresh.get_by_label("Password").fill(PASSWORD)
+            fresh.get_by_role("button", name="Unlock").click()
+
+            assert fresh.evaluate("localStorage.length") == 1, (
+                "only the unlock flag should be stored on a device that has never played"
+            )
+            loading = fresh.get_by_text("Loading players…")
+            if loading.count():
+                loading.wait_for(state="detached", timeout=20000)
+            expect(fresh.get_by_role("button", name="Continue as Alice")).to_be_visible()
+            expect(fresh.get_by_role("button", name="Continue as Bob")).to_be_visible()
+            check("a device that has never played still sees the saved players")
+
+            # A name that exists cannot be created again.
+            fresh.get_by_label("New player name").fill("alice")
+            fresh.get_by_role("button", name="Create and continue").click()
+            expect(fresh.get_by_role("alert").first).to_contain_text("already taken")
+            check("player names are unique, case-insensitively")
+
+            fresh.get_by_role("button", name="Continue as Alice").click()
+            expect(fresh.get_by_text("Playing as")).to_be_visible()
+
+            resume = fresh.locator(".game-list button.game-pick")
+            expect(resume).to_have_count(1, timeout=20000)
+            expect(resume.first).to_contain_text(room_code)
+            expect(resume.first).to_contain_text("vs Bob")
+            check("the lobby lists the unfinished game, found by identity alone")
+            fresh.screenshot(path=str(shots / "15-resume-list.png"), full_page=True)
+
+            resume.first.click()
+            expect(fresh.locator("button.tile")).to_have_count(4, timeout=30000)
+            assert board_word(fresh) == board_word(host), (board_word(fresh), board_word(host))
+            expect(fresh.locator(".move-list li")).to_have_count(3)
+            check("resuming from a fresh device lands on the right position")
+
+            # The seat has to come from the identity, not from the fact that this
+            # browser arrived by joining: Alice must not land in Bob's chair.
+            expect(fresh.locator(".identity")).to_contain_text("You are Alice")
+            expect(fresh.locator('.rack[data-you="true"] h3')).to_contain_text("Alice")
+            expect(fresh.get_by_role("status").first).to_contain_text("Waiting for Bob")
+            assert fresh.locator("button.tile[disabled]").count() == 4, (
+                "it is Bob's turn, so the resumed board must be locked"
+            )
+            check("the resumed seat follows the identity, not the route in")
+
+            # Bob, on the other device, plays: the resumed device must see it.
+            expect(rejoin.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
+            played.append(play(rejoin, played))
+            expect(fresh.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
+            assert board_word(fresh) == played[-1], (board_word(fresh), played[-1])
+            check("a move from the other device reaches the resumed one")
+
+            # And the resumed device can really move, not just watch.
+            played.append(play(fresh, played))
+            expect(rejoin.get_by_role("status").first).to_contain_text("Your turn.", timeout=20000)
+            assert board_word(rejoin) == played[-1]
+            check("the resumed device holds a real seat and can move")
+
+            # --- deleting an identity removes it everywhere ---
+            fresh.get_by_role("button", name="Leave").click()
+            fresh.get_by_role("button", name="Switch player").click()
+            loading = fresh.get_by_text("Loading players…")
+            if loading.count():
+                loading.wait_for(state="detached", timeout=20000)
+            fresh.get_by_role("button", name="Remove Bob").click()
+            fresh.get_by_role("button", name="Delete").click()
+            expect(fresh.get_by_role("button", name="Continue as Bob")).to_have_count(0)
+            with lock:
+                assert "bob" not in users, f"Bob should be gone from the database: {list(users)}"
+            check("deleting a player removes the shared identity, not just a local copy")
+
+            ctx_fresh.close()
+
             # --- every write is shaped the way the database expects ---
             if args.real:
                 print("  ..  ran against the real database; write-shape check skipped")
@@ -384,13 +571,23 @@ def main() -> int:
                 print(f"\n{checks} relayed-game checks passed against the real database.")
                 return 0
             assert writes, "no writes were recorded"
-            allowed = {"state", "updatedAt", "host", "guest"}
-            for body in writes:
-                assert set(body) <= allowed, f"unexpected keys written: {set(body) - allowed}"
+            room_keys = {"state", "updatedAt", "host", "guest"}
+            user_keys = {"name", "lastSeen", "rooms"}
+            for write in writes:
+                path, body = write.get("path"), write.get("body")
+                if body is None:
+                    continue
+                top = path.split("/")[0] if path else "rooms"
+                if top == "users":
+                    assert set(body) <= user_keys | {c for c in body if len(c) == 6}, (
+                        f"unexpected user keys: {set(body)}"
+                    )
+                else:
+                    assert set(body) <= room_keys, f"unexpected room keys: {set(body) - room_keys}"
+                    if "state" in body:
+                        assert isinstance(body["state"], str) and body["state"], body
                 if "updatedAt" in body:
                     assert body["updatedAt"] == {".sv": "timestamp"}, body
-                if "state" in body:
-                    assert isinstance(body["state"], str) and body["state"], body
             check(f"all {len(writes)} writes stay within the expected schema")
 
             ctx_host.close()

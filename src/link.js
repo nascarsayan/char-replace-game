@@ -34,6 +34,9 @@ import { WORD_SET } from './words.js';
 // down costs nothing and makes a recorded game replay the same way for good.
 const VERSION = 4;
 const OLDEST_READABLE_VERSION = 1;
+
+/** Exported so tools cannot drift out of step with the format they rewrite. */
+export const LINK_VERSION = VERSION;
 export const FRAGMENT_KEY = 'g';
 
 function toBase64Url(text) {

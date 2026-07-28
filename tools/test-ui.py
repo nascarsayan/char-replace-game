@@ -5,6 +5,11 @@
     python3 tools/test-ui.py [--headed] [--shots DIR]
 
 Fails loudly on any console error or page exception.
+
+Deliberately hermetic: the config file is served empty so identities and games stay
+in this browser's localStorage. Otherwise a checkout with a database configured
+would have these tests writing players and rooms into the real one.
+tools/test-cloud.py covers the database-backed behaviour.
 """
 
 from __future__ import annotations
@@ -23,9 +28,25 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PASSWORD = "chargame"
 
 
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def log_message(self, *args):  # noqa: D102 - quiet
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        # Keep identities local, whatever the checkout is configured with.
+        if self.path == "/src/cloud-config.js":
+            body = b"export const DATABASE_URL = '';\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
+
+
 def serve(directory: pathlib.Path) -> tuple[str, socketserver.TCPServer]:
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
-    handler.log_message = lambda *a, **k: None  # type: ignore[method-assign]
+    handler = functools.partial(Handler, directory=str(directory))
     httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{httpd.server_address[1]}/", httpd
